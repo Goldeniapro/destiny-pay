@@ -164,14 +164,144 @@ def test_pay_bill_with_paypal_only_once(biz):
     assert len(biz.paypal.payouts) == 1
 
 
-def test_payout_failure_allows_retry_and_duplicate_is_blocked(biz, monkeypatch):
+def test_payout_rejected_allows_retry(biz, monkeypatch):
     bill = biz.add_bill("Proveedor", "x", 50, biz.today().isoformat(), "none", "p@example.com")
     original = biz.paypal.create_payout
-    monkeypatch.setattr(biz.paypal, "create_payout", lambda *a, **k: (_ for _ in ()).throw(PayPalError("PayPal 500: down")))
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda *a, **k: (_ for _ in ()).throw(PayPalError("PayPal 422: RECEIVER_INVALID")))
     with pytest.raises(PayPalError):
         biz.pay_bill_with_paypal(bill["id"])
+    assert biz.bill_view(bill["id"])["status"] == "pending"  # PayPal said no: nothing was paid
     monkeypatch.setattr(biz.paypal, "create_payout", original)
     assert biz.pay_bill_with_paypal(bill["id"])["status"] == "paid"
+
+
+def test_payout_timeout_blocks_paying_twice(biz, monkeypatch):
+    bill = biz.add_bill("Proveedor", "x", 50, biz.today().isoformat(), "none", "p@example.com")
+    paid = []
+
+    def flaky(sender_batch_id, email, amount, **k):
+        paid.append(sender_batch_id)  # PayPal processed it...
+        raise PayPalError("Could not reach PayPal: ReadTimeout")  # ...but we never heard back
+
+    monkeypatch.setattr(biz.paypal, "create_payout", flaky)
+    with pytest.raises(ValidationError, match="may or may not"):
+        biz.pay_bill_with_paypal(bill["id"])
+    assert biz.bill_view(bill["id"])["status"] == "processing"
+    with pytest.raises(ValidationError, match="in progress"):
+        biz.mark_bill_paid(bill["id"], "CASH")  # no cash payment on top of a possible PayPal one
+    assert biz.store.alerts_since(biz.ws, 0)[-1]["key"] == "a_payout_unknown"
+
+    def already(sender_batch_id, email, amount, **k):
+        raise PayPalError("PayPal 400: SENDER_BATCH_ID_ALREADY_USED")
+
+    monkeypatch.setattr(biz.paypal, "create_payout", already)
+    biz.check_payouts()  # PayPal confirms the first attempt existed
+    assert biz.bill_view(bill["id"])["status"] == "paid" and len(paid) == 1
+    assert biz.overview()["expense"] == 50
+
+
+def test_pending_payout_settles_or_rolls_back_from_paypal_status(biz, monkeypatch):
+    rent = biz.add_bill("Marta", "Alquiler", 300, biz.today().isoformat(), "monthly", "marta@example.com")
+    yarn = biz.add_bill("Textiles", "Hilo", 100, biz.today().isoformat(), "none", "t@example.com")
+    pending = {"batch_header": {"payout_batch_id": "B", "batch_status": "PENDING"}}
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda sbid, *a, **k: {"batch_header": {"payout_batch_id": "B-" + sbid, "batch_status": "PENDING"}})
+    req = biz.request_confirmation("pay_bill", str(rent["id"]))
+    done, reply, result = biz.resolve_confirmation(req["confirmation_id"], True, "es")
+    assert done and "Te aviso cuando PayPal lo confirme" in reply and result["status"] == "processing"
+    assert biz.overview()["expense"] == 0  # not counted until PayPal confirms
+    biz.pay_bill_with_paypal(yarn["id"])
+    statuses = {f"B-dp{biz.ws[:10]}b{rent['id']}": "SUCCESS", f"B-dp{biz.ws[:10]}b{yarn['id']}": "RETURNED"}
+    monkeypatch.setattr(biz.paypal, "get_payout", lambda bid: {"batch_header": {"payout_batch_id": bid, "batch_status": "SUCCESS"},
+                                                               "items": [{"transaction_status": statuses[bid]}]})
+    biz.check_payouts()
+    assert biz.bill_view(rent["id"])["status"] == "paid" and biz.bill_view(yarn["id"])["status"] == "pending"
+    assert biz.overview()["expense"] == 300 and len(biz.list_bills("pending")) == 2  # next month's rent + the returned one
+    keys = [a["key"] for a in biz.store.alerts_since(biz.ws, 0)]
+    assert "a_payout_done" in keys and "a_payout_failed" in keys
+    biz.check_payouts()
+    assert biz.overview()["expense"] == 300  # checking again never counts twice
+
+
+def test_payout_limits(biz):
+    big = biz.add_bill("Proveedor", "x", 5000, biz.today().isoformat(), "none", "p@example.com")
+    with pytest.raises(ValidationError, match="limited"):
+        biz.pay_bill_with_paypal(big["id"])
+    for i in range(3):
+        b = biz.add_bill(f"P{i}", "x", 1000, biz.today().isoformat(), "none", f"p{i}@example.com")
+        if i < 3:
+            biz.pay_bill_with_paypal(b["id"])
+    extra = biz.add_bill("P9", "x", 10, biz.today().isoformat(), "none", "p9@example.com")
+    with pytest.raises(ValidationError, match="today's limit"):
+        biz.pay_bill_with_paypal(extra["id"])
+
+
+def test_confirmation_never_stuck_and_refresh_failure_is_not_a_failure(biz, monkeypatch):
+    inv = draft(biz)
+    req = biz.request_confirmation("send_invoice", inv["id"])
+    real_get = biz.paypal.get_invoice
+    calls = {"n": 0}
+
+    def flaky_get(i):
+        calls["n"] += 1
+        raise PayPalError("PayPal 503")
+
+    monkeypatch.setattr(biz.paypal, "get_invoice", flaky_get)
+    done, reply, result = biz.resolve_confirmation(req["confirmation_id"], True, "en")
+    assert done and result["status"] == "SENT"  # PayPal sent it; the local copy catches up later
+    monkeypatch.setattr(biz.paypal, "get_invoice", real_get)
+    inv2 = draft(biz, name="Otro", email="otro@example.com")
+    req2 = biz.request_confirmation("send_invoice", inv2["id"])
+    monkeypatch.setattr(biz.paypal, "send_invoice", lambda i: (_ for _ in ()).throw(KeyError("bug")))
+    done, reply, _ = biz.resolve_confirmation(req2["confirmation_id"], True, "en")
+    assert not done and "unexpected" in reply
+    assert biz.store.one("SELECT status FROM confirmations WHERE id=?", (req2["confirmation_id"],))["status"] == "failed"
+
+
+def test_record_payment_uses_paypal_payment_id(biz, monkeypatch):
+    inv = draft(biz)
+    biz.send_invoice(inv["id"])
+    ids = iter(["P1", "P2"])
+    original = biz.paypal.record_payment
+
+    def rec(i, amount, method="CASH", note=""):
+        original(i, amount, method, note)
+        return {"payment_id": next(ids)}
+
+    monkeypatch.setattr(biz.paypal, "record_payment", rec)
+    biz.record_payment(inv["id"], 10, "CASH")
+    biz.record_payment(inv["id"], 10, "CASH")
+    assert biz.overview()["income"] == 20
+
+
+def test_monthly_bill_keeps_its_day(biz):
+    bill = biz.add_bill("Marta", "Alquiler", 300, "2026-12-31", "monthly")
+    biz.store.x("UPDATE bills SET due_date='2026-12-31' WHERE id=?", (bill["id"],))
+    biz.mark_bill_paid(bill["id"])
+    jan = biz.list_bills("pending")[0]
+    assert jan["due_date"] == "2027-01-31"
+    biz.mark_bill_paid(jan["id"])
+    assert biz.list_bills("pending")[0]["due_date"] == "2027-02-28"
+    feb = biz.list_bills("pending")[0]
+    biz.mark_bill_paid(feb["id"])
+    assert biz.list_bills("pending")[0]["due_date"] == "2027-03-31"
+
+
+def test_pending_bills_stay_visible_after_many_paid(biz):
+    for i in range(205):
+        biz.store.x("INSERT INTO bills(ws,payee,description,amount,currency,due_date,status,created_at,paid_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (biz.ws, f"Old{i}", "", 1, "USD", "2026-01-01", "paid", 0, 0))
+    b = biz.add_bill("Nuevo", "x", 10, (biz.today() + timedelta(days=3)).isoformat())
+    assert [x["id"] for x in biz.list_bills("pending")] == [b["id"]]
+
+
+def test_payment_announced_once_even_with_concurrent_refreshes(biz):
+    inv = draft(biz)
+    biz.send_invoice(inv["id"])
+    biz.paypal.mark_paid(inv["id"])
+    biz.refresh_invoice(inv["id"])
+    biz.store.x("UPDATE invoices SET status='PAID' WHERE id=?", (inv["id"],))
+    biz.refresh_invoice(inv["id"])
+    assert [a["key"] for a in biz.store.alerts_since(biz.ws, 0)].count("a_invoice_paid") == 1
 
 
 def test_pay_bill_needs_email(biz):
@@ -213,7 +343,7 @@ def test_overview_cashflow_and_briefing(biz):
     flow = biz.cashflow(30)
     assert len(flow) == 30 and sum(d["out"] for d in flow) == 300 and sum(d["in"] for d in flow) == 90
     text = biz.briefing("es")
-    assert "90.00 USD" in text and "Marta" in text
+    assert "90,00 USD" in text and "Marta" in text and "90.00 USD" in biz.briefing("en")
     assert "Marta" in biz.briefing("zh")
 
 

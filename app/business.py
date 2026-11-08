@@ -6,8 +6,10 @@ Tools call these methods; money-moving actions (send, cancel, pay) run only thro
 
 from __future__ import annotations
 
+import calendar
 import difflib
 import json
+import os
 import re
 import time
 import uuid
@@ -22,6 +24,13 @@ MAX_INVOICES = 60
 MAX_BILLS = 200
 MAX_FACTS = 100
 CONFIRMATION_TTL = 15 * 60
+PAYOUT_MAX = float(os.environ.get("DP_PAYOUT_MAX", "2000"))              # per payment
+PAYOUT_DAILY_WS = float(os.environ.get("DP_PAYOUT_DAILY_LIMIT", "3000"))   # per business per day
+PAYOUT_DAILY_ALL = float(os.environ.get("DP_PAYOUT_GLOBAL_DAILY", "20000"))  # whole demo per day
+SENDS_DAILY_ALL = int(os.environ.get("DP_SENDS_GLOBAL_DAILY", "500"))      # invoices emailed per day
+PAYOUT_OK = {"SUCCESS"}
+PAYOUT_UNCLAIMED = {"UNCLAIMED", "PENDING_CLAIM"}
+PAYOUT_BAD = {"FAILED", "RETURNED", "BLOCKED", "DENIED", "REFUNDED", "REVERSED", "CANCELED", "CANCELLED"}
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 _SPOKEN = [
     (r"\s*\b(arroba|at|arobase)\b\s*", "@"), (r"\s*(艾特|圈a)\s*", "@"),
@@ -212,12 +221,15 @@ class Business:
         due = float(due_raw) if due_raw not in (None, "") else (0.0 if s["status"] in PAID_STATUSES else row["due"])
         meta = json.loads(row["summary"])
         meta.update({"payer_link": s["payer_link"], "number": s["number"]})
+        newly_paid = 0
+        if s["status"] == "PAID":
+            newly_paid = self.store.x("UPDATE invoices SET status='PAID' WHERE id=? AND status!='PAID'", (invoice_id,)).rowcount
         self.store.x("UPDATE invoices SET status=?, total=?, due=?, summary=?, updated_at=?, refreshed_at=? WHERE id=?",
                      (s["status"], total, due, json.dumps(meta, ensure_ascii=False), time.time(), time.time(), invoice_id))
-        if s["status"] == "PAID" and row["status"] != "PAID":
+        if newly_paid == 1:  # only the refresh that flipped the status announces it
             paid_now = row["due"] if row["due"] > 0 else total
             self._movement("income", f"PayPal invoice {s['number'] or invoice_id}", paid_now, "PAYPAL", "sales", row["contact"], f"inv:{invoice_id}:online")
-            self.store.alert(self.ws, "a_invoice_paid", name=row["contact"], total=i18n.fmt_money(total, self.currency))
+            self.store.alert(self.ws, "a_invoice_paid", name=row["contact"], total=[total, self.currency])
             self.log("invoice_paid", f"{row['contact']} paid {i18n.fmt_money(total, self.currency)} online", invoice_id=invoice_id)
         return self.invoice_view(invoice_id)
 
@@ -247,17 +259,27 @@ class Business:
             out = [i for i in out if i["status"] == "DRAFT"]
         return out
 
+    def _refresh_after(self, invoice_id: str, assumed_status: str) -> dict:
+        try:
+            return self.refresh_invoice(invoice_id)
+        except Exception:  # PayPal already did it; record what we know and let the scheduler catch up
+            self.store.x("UPDATE invoices SET status=?, refreshed_at=0 WHERE id=?", (assumed_status, invoice_id))
+            return self.invoice_view(invoice_id)
+
     def send_invoice(self, invoice_id: str) -> dict:
         self._owned(invoice_id)
+        sent_today = self.store.one("SELECT COUNT(*) n FROM activity WHERE kind='invoice_sent' AND at>?", (time.time() - 86400,))["n"]
+        if sent_today >= SENDS_DAILY_ALL:
+            raise ValidationError("The demo reached today's limit of invoices sent. Try again tomorrow.")
         self.paypal.send_invoice(invoice_id)
-        view = self.refresh_invoice(invoice_id)
+        view = self._refresh_after(invoice_id, "SENT")
         self.log("invoice_sent", f"Invoice sent to {view['customer']} ({view['email']})", invoice_id=invoice_id)
         return view
 
     def cancel_invoice(self, invoice_id: str, note: str = "") -> dict:
         self._owned(invoice_id)
         self.paypal.cancel_invoice(invoice_id, _clean(note, 500))
-        view = self.refresh_invoice(invoice_id)
+        view = self._refresh_after(invoice_id, "CANCELLED")
         self.log("invoice_cancelled", f"Invoice for {view['customer']} cancelled", invoice_id=invoice_id)
         return view
 
@@ -275,10 +297,11 @@ class Business:
         method = method if method in METHODS else "OTHER"
         paypal_method = method if method in PAYMENT_METHODS else "OTHER"
         label = {"YAPE": "Yape", "PLIN": "Plin", "CARD": "card"}.get(method, "")
-        self.paypal.record_payment(invoice_id, amount, paypal_method, _clean(" ".join(filter(None, [label, note])), 200))
-        n = self.store.one("SELECT COUNT(*) n FROM movements WHERE ws=? AND ref LIKE ?", (self.ws, f"inv:{invoice_id}:pay:%"))["n"]
-        self._movement("income", f"Payment on invoice for {row['contact']}", amount, method, "sales", row["contact"], f"inv:{invoice_id}:pay:{n + 1}")
-        view = self.refresh_invoice(invoice_id)
+        out = self.paypal.record_payment(invoice_id, amount, paypal_method, _clean(" ".join(filter(None, [label, note])), 200))
+        payment_id = (out or {}).get("payment_id") if isinstance(out, dict) else None
+        self._movement("income", f"Payment on invoice for {row['contact']}", amount, method, "sales", row["contact"],
+                       f"inv:{invoice_id}:pay:{payment_id or uuid.uuid4().hex}")
+        view = self._refresh_after(invoice_id, row["status"])
         self.log("payment_recorded", f"{row['contact']} paid {i18n.fmt_money(amount, self.currency)} ({method})", invoice_id=invoice_id)
         return view
 
@@ -309,9 +332,9 @@ class Business:
             email = known[0]["email"] if known else ""
         if self.store.one("SELECT COUNT(*) n FROM bills WHERE ws=? AND status='pending'", (self.ws,))["n"] >= MAX_BILLS:
             raise ValidationError("Too many pending bills.")
-        cur = self.store.x("INSERT INTO bills(ws,payee,payee_email,description,amount,currency,due_date,recurrence,status,created_at) "
-                           "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                           (self.ws, payee, email, _clean(description, 200), amount, self.currency, d.isoformat(), recurrence, "pending", time.time()))
+        cur = self.store.x("INSERT INTO bills(ws,payee,payee_email,description,amount,currency,due_date,recurrence,status,anchor_day,created_at) "
+                           "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                           (self.ws, payee, email, _clean(description, 200), amount, self.currency, d.isoformat(), recurrence, "pending", d.day, time.time()))
         if email:
             self.save_contact(payee, email, "supplier")
         self.log("bill_added", f"Bill to pay: {payee} {i18n.fmt_money(amount, self.currency)} on {d.isoformat()}", bill_id=cur.lastrowid)
@@ -329,36 +352,49 @@ class Business:
 
     def bill_view(self, bill_id) -> dict:
         b = self._bill(bill_id)
-        overdue = b["status"] == "pending" and b["due_date"] < self.today().isoformat()
+        overdue = b["status"] in ("pending", "processing") and b["due_date"] < self.today().isoformat()
         return {"id": b["id"], "payee": b["payee"], "payee_email": b["payee_email"], "description": b["description"],
                 "amount": b["amount"], "currency": b["currency"], "due_date": b["due_date"], "recurrence": b["recurrence"],
                 "status": b["status"], "method": b["method"], "overdue": overdue}
 
     def list_bills(self, status: str = "pending", within_days: int = 0) -> list[dict]:
-        rows = self.store.q("SELECT id FROM bills WHERE ws=? ORDER BY due_date, id LIMIT 200", (self.ws,))
+        if status == "pending":
+            rows = self.store.q("SELECT id FROM bills WHERE ws=? AND status IN ('pending','processing') ORDER BY due_date, id LIMIT 200", (self.ws,))
+        elif status == "paid":
+            rows = self.store.q("SELECT id FROM bills WHERE ws=? AND status='paid' ORDER BY paid_at DESC LIMIT 50", (self.ws,))
+        else:
+            rows = (self.store.q("SELECT id FROM bills WHERE ws=? AND status IN ('pending','processing') ORDER BY due_date, id LIMIT 200", (self.ws,))
+                    + self.store.q("SELECT id FROM bills WHERE ws=? AND status='paid' ORDER BY paid_at DESC LIMIT 50", (self.ws,)))
         out = [self.bill_view(r["id"]) for r in rows]
-        if status in ("pending", "paid"):
-            out = [b for b in out if b["status"] == status]
         if within_days and int(within_days) > 0:
             limit = (self.today() + timedelta(days=int(within_days))).isoformat()
             out = [b for b in out if b["due_date"] <= limit]
         return out
 
     def _settle_bill(self, b: dict, method: str, note: str, batch_id: str = "") -> dict:
-        self.store.x("UPDATE bills SET status='paid', method=?, paid_at=?, payout_batch_id=? WHERE id=?", (method, time.time(), batch_id, b["id"]))
+        claimed = self.store.x("UPDATE bills SET status='paid', method=?, paid_at=?, payout_batch_id=? WHERE id=? AND status IN ('pending','processing')",
+                               (method, time.time(), batch_id, b["id"])).rowcount
+        if claimed != 1:
+            raise ValidationError("That bill is already paid.")
         self._movement("expense", _clean(f"{b['payee']}: {b['description'] or note}", 200), b["amount"], method, "bills", b["payee"], f"bill:{b['id']}:paid")
         if b["recurrence"] != "none":
             d = date.fromisoformat(b["due_date"])
-            nxt = d + (timedelta(days=7) if b["recurrence"] == "weekly" else timedelta(days=31))
-            if b["recurrence"] == "monthly":
-                nxt = date(d.year + (d.month // 12), d.month % 12 + 1, min(d.day, 28))
-            self.store.x("INSERT INTO bills(ws,payee,payee_email,description,amount,currency,due_date,recurrence,status,created_at) "
-                         "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                         (self.ws, b["payee"], b["payee_email"], b["description"], b["amount"], b["currency"], nxt.isoformat(), b["recurrence"], "pending", time.time()))
+            if b["recurrence"] == "weekly":
+                nxt = d + timedelta(days=7)
+            else:
+                year, month = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
+                anchor = b.get("anchor_day") or d.day
+                nxt = date(year, month, min(anchor, calendar.monthrange(year, month)[1]))
+            self.store.x("INSERT INTO bills(ws,payee,payee_email,description,amount,currency,due_date,recurrence,status,anchor_day,created_at) "
+                         "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                         (self.ws, b["payee"], b["payee_email"], b["description"], b["amount"], b["currency"], nxt.isoformat(), b["recurrence"],
+                          "pending", b.get("anchor_day") or d.day, time.time()))
         return self.bill_view(b["id"])
 
     def mark_bill_paid(self, bill_id, method: str = "CASH", note: str = "") -> dict:
         b = self._bill(bill_id)
+        if b["status"] == "processing":
+            raise ValidationError("A PayPal payment for this bill is in progress. Wait for PayPal's confirmation before paying it another way.")
         if b["status"] != "pending":
             raise ValidationError("That bill is already paid.")
         view = self._settle_bill(b, method if method in METHODS else "OTHER", note)
@@ -368,31 +404,110 @@ class Business:
     def pay_bill_with_paypal(self, bill_id) -> dict:
         b = self._bill(bill_id)
         if b["status"] != "pending":
-            raise ValidationError("That bill is already paid.")
+            raise ValidationError("That bill is already paid or its payment is in progress.")
         if not EMAIL_RE.match(b["payee_email"] or ""):
             raise ValidationError(f"I need {b['payee']}'s PayPal email to pay with PayPal.")
+        if b["amount"] > PAYOUT_MAX:
+            raise ValidationError(f"For safety, PayPal payments from the demo are limited to {PAYOUT_MAX:,.0f} per bill.")
+        day_ago = time.time() - 86400
+        spent_ws = self.store.one("SELECT COALESCE(SUM(amount),0) s FROM payouts WHERE ws=? AND created_at>? AND status NOT IN ('failed')", (self.ws, day_ago))["s"]
+        spent_all = self.store.one("SELECT COALESCE(SUM(amount),0) s FROM payouts WHERE created_at>? AND status NOT IN ('failed')", (day_ago,))["s"]
+        if spent_ws + b["amount"] > PAYOUT_DAILY_WS or spent_all + b["amount"] > PAYOUT_DAILY_ALL:
+            raise ValidationError("For safety, today's limit for PayPal payments was reached. Try again tomorrow.")
         sender_batch_id = f"dp{self.ws[:10]}b{b['id']}"
         try:  # the primary key makes a second, concurrent attempt fail here, before any money moves
-            self.store.x("INSERT INTO payouts(sender_batch_id,ws,bill_id,status,created_at) VALUES(?,?,?,?,?)",
-                         (sender_batch_id, self.ws, b["id"], "starting", time.time()))
+            self.store.x("INSERT INTO payouts(sender_batch_id,ws,bill_id,status,amount,created_at) VALUES(?,?,?,?,?,?)",
+                         (sender_batch_id, self.ws, b["id"], "starting", b["amount"], time.time()))
         except Exception:
             raise ValidationError("This bill already has a PayPal payment in progress or completed.")
+        if self.store.x("UPDATE bills SET status='processing' WHERE id=? AND status='pending'", (b["id"],)).rowcount != 1:
+            self.store.x("DELETE FROM payouts WHERE sender_batch_id=?", (sender_batch_id,))
+            raise ValidationError("That bill is already paid or its payment is in progress.")
         try:
             out = self.paypal.create_payout(sender_batch_id, b["payee_email"], b["amount"],
                                             note=_clean(f"{b['description'] or 'Payment'} - {self.info['name']}", 200),
                                             subject=f"Payment from {self.info['name']}")
         except PayPalError as e:
-            if "SENDER_BATCH_ID" in str(e).upper() or "ALREADY" in str(e).upper():
-                self.store.x("UPDATE payouts SET status='duplicate' WHERE sender_batch_id=?", (sender_batch_id,))
+            msg = str(e)
+            if "SENDER_BATCH_ID" in msg.upper() or "ALREADY" in msg.upper():
+                self.store.x("UPDATE payouts SET status='unknown' WHERE sender_batch_id=?", (sender_batch_id,))
                 raise ValidationError("PayPal says this bill was already paid earlier, so I did not pay it again.")
-            self.store.x("DELETE FROM payouts WHERE sender_batch_id=?", (sender_batch_id,))  # nothing was paid: allow a retry
-            raise
+            if re.match(r"PayPal 4\d\d", msg):  # PayPal rejected the request: nothing was paid, the owner can retry
+                self.store.x("DELETE FROM payouts WHERE sender_batch_id=?", (sender_batch_id,))
+                self.store.x("UPDATE bills SET status='pending' WHERE id=?", (b["id"],))
+                raise
+            # Timeout or server error: PayPal may have paid. Never let the owner pay again until we know.
+            self.store.x("UPDATE payouts SET status='unknown' WHERE sender_batch_id=?", (sender_batch_id,))
+            self.store.alert(self.ws, "a_payout_unknown", payee=b["payee"])
+            self.log("payout_unknown", f"Payment to {b['payee']} not confirmed by PayPal yet", bill_id=b["id"])
+            raise ValidationError("PayPal did not answer in time. The payment may or may not have gone out: I'll keep checking. "
+                                  "Do not pay this bill another way until it is confirmed.")
         header = out.get("batch_header", {}) if isinstance(out, dict) else {}
-        batch_id, batch_status = header.get("payout_batch_id", ""), header.get("batch_status", "PENDING")
+        batch_id, batch_status = header.get("payout_batch_id", ""), str(header.get("batch_status", "PENDING")).upper()
         self.store.x("UPDATE payouts SET status=?, batch_id=? WHERE sender_batch_id=?", (batch_status, batch_id, sender_batch_id))
-        view = self._settle_bill(b, "PAYPAL", "PayPal payout", batch_id)
-        self.log("bill_paid", f"Paid {b['payee']} {i18n.fmt_money(b['amount'], b['currency'])} with PayPal (batch {batch_id})", bill_id=b["id"])
-        return {**view, "payout_batch_id": batch_id, "payout_status": batch_status}
+        self.log("payout_sent", f"PayPal payment to {b['payee']} {i18n.fmt_money(b['amount'], b['currency'])} sent (batch {batch_id}, {batch_status})", bill_id=b["id"])
+        if batch_status in PAYOUT_BAD:
+            self._payout_failed(b, sender_batch_id)
+            raise ValidationError("PayPal denied this payment. The bill stays pending.")
+        if batch_status in PAYOUT_OK:
+            self.check_payouts(only=sender_batch_id, announce=False)  # the spoken reply already says it
+        return {**self.bill_view(b["id"]), "payout_batch_id": batch_id, "payout_status": batch_status}
+
+    def _payout_failed(self, b: dict, sender_batch_id: str) -> None:
+        self.store.x("UPDATE payouts SET status='failed' WHERE sender_batch_id=?", (sender_batch_id,))
+        self.store.x("UPDATE bills SET status='pending' WHERE id=? AND status='processing'", (b["id"],))
+        self.store.alert(self.ws, "a_payout_failed", payee=b["payee"])
+        self.log("payout_failed", f"PayPal payment to {b['payee']} failed; bill is pending again", bill_id=b["id"])
+
+    def check_payouts(self, only: str = "", announce: bool = True) -> int:
+        """Settle or roll back payouts still in flight, from PayPal's own status. Safe to run any number of times."""
+        sql = "SELECT * FROM payouts WHERE ws=? AND status NOT IN ('done','failed','unclaimed')"
+        rows = self.store.q(sql + (" AND sender_batch_id=?" if only else ""), (self.ws, only) if only else (self.ws,))
+        settled = 0
+        for p in rows:
+            b = self.store.one("SELECT * FROM bills WHERE id=? AND ws=?", (p["bill_id"], self.ws))
+            if b is None:
+                continue
+            self.store.x("UPDATE payouts SET checked_at=? WHERE sender_batch_id=?", (time.time(), p["sender_batch_id"]))
+            try:
+                if p["batch_id"]:
+                    info = self.paypal.get_payout(p["batch_id"])
+                elif p["status"] == "unknown":  # we never learned the batch id: asking again with the same id is safe
+                    try:
+                        info = self.paypal.create_payout(p["sender_batch_id"], b["payee_email"], b["amount"])
+                    except PayPalError as e:
+                        if "SENDER_BATCH_ID" in str(e).upper() or "ALREADY" in str(e).upper():
+                            info = {"batch_header": {"batch_status": "SUCCESS"}, "items": [{"transaction_status": "SUCCESS"}]}
+                        else:
+                            raise
+                    header = info.get("batch_header", {})
+                    if header.get("payout_batch_id"):
+                        self.store.x("UPDATE payouts SET batch_id=? WHERE sender_batch_id=?", (header["payout_batch_id"], p["sender_batch_id"]))
+                else:
+                    continue
+            except PayPalError:
+                continue
+            header = info.get("batch_header", {}) if isinstance(info, dict) else {}
+            items = info.get("items") or [] if isinstance(info, dict) else []
+            batch_status = str(header.get("batch_status", "")).upper()
+            item_status = str((items[0] if items else {}).get("transaction_status", "")).upper()
+            status = item_status or batch_status
+            if status in PAYOUT_BAD or batch_status in PAYOUT_BAD:
+                self._payout_failed(b, p["sender_batch_id"])
+            elif status in PAYOUT_OK | PAYOUT_UNCLAIMED or (batch_status == "SUCCESS" and not item_status):
+                try:
+                    self._settle_bill(b, "PAYPAL", "PayPal payout", header.get("payout_batch_id") or p["batch_id"])
+                except ValidationError:
+                    pass  # already settled
+                unclaimed = status in PAYOUT_UNCLAIMED
+                self.store.x("UPDATE payouts SET status=? WHERE sender_batch_id=?", ("unclaimed" if unclaimed else "done", p["sender_batch_id"]))
+                if announce or unclaimed:
+                    self.store.alert(self.ws, "a_payout_unclaimed" if unclaimed else "a_payout_done", payee=b["payee"], amount=[b["amount"], b["currency"]])
+                self.log("bill_paid", f"Paid {b['payee']} {i18n.fmt_money(b['amount'], b['currency'])} with PayPal", bill_id=b["id"])
+                settled += 1
+            elif batch_status:
+                self.store.x("UPDATE payouts SET status=? WHERE sender_batch_id=?", (batch_status, p["sender_batch_id"]))
+        return settled
 
     # --- money in and out ---------------------------------------------------------------
     def _movement(self, kind, description, amount, method, category, contact, ref="", currency=None, at=None) -> None:
@@ -472,7 +587,7 @@ class Business:
                     view = self.invoice_view(r["invoice_id"])
                     if view["status"] in UNPAID_STATUSES:
                         self.paypal.remind_invoice(r["invoice_id"], r["text"])
-                        self.store.alert(self.ws, "a_customer_reminded", name=view["customer"], total=i18n.fmt_money(view["total"], view["currency"]))
+                        self.store.alert(self.ws, "a_customer_reminded", name=view["customer"], total=[view["total"], view["currency"]])
                         self.log("invoice_reminded", f"Scheduled reminder sent to {view['customer']}", invoice_id=r["invoice_id"])
                     else:
                         result = "skipped: invoice no longer unpaid"
@@ -568,23 +683,23 @@ class Business:
         parts = [i18n.t("b_morning" if hour < 12 else "b_afternoon" if hour < 19 else "b_evening", lang) + ("。" if lang == "zh" else ".")]
         cur = self.currency
         if o["open_invoices"]:
-            parts.append(i18n.t("b_receivable", lang, amount=i18n.fmt_money(o["receivable"], cur), n=o["open_invoices"]))
+            parts.append(i18n.t("b_receivable", lang, amount=i18n.fmt_money(o["receivable"], cur, lang), n=o["open_invoices"]))
             if o["overdue_invoices"]:
                 parts.append(i18n.t("b_overdue", lang, n=len(o["overdue_invoices"])))
         if o["bills_overdue"]:
             b0 = o["bills_overdue"][0]
-            parts.append(i18n.t("b_bills_overdue", lang, n=len(o["bills_overdue"]), payee=b0["payee"], amount=i18n.fmt_money(b0["amount"], cur)))
+            parts.append(i18n.t("b_bills_overdue", lang, n=len(o["bills_overdue"]), payee=b0["payee"], amount=i18n.fmt_money(b0["amount"], cur, lang)))
         today_s, week_s = self.today().isoformat(), (self.today() + timedelta(days=7)).isoformat()
         upcoming = [b for b in self.list_bills("pending") if today_s <= b["due_date"] <= week_s]
         if upcoming:
-            parts.append(i18n.t("b_bills", lang, amount=i18n.fmt_money(sum(b["amount"] for b in upcoming), cur), payee=upcoming[0]["payee"],
+            parts.append(i18n.t("b_bills", lang, amount=i18n.fmt_money(sum(b["amount"] for b in upcoming), cur, lang), payee=upcoming[0]["payee"],
                                 date=i18n.fmt_date(date.fromisoformat(upcoming[0]["due_date"]), lang)))
         end_of_day = self.now().replace(hour=23, minute=59).timestamp()
         today_rem = self.store.one("SELECT COUNT(*) n FROM reminders WHERE ws=? AND status='pending' AND due_at<=?", (self.ws, end_of_day))["n"]
         if today_rem:
             parts.append(i18n.t("b_reminders", lang, n=today_rem))
         if o["income"] or o["expense"]:
-            parts.append(i18n.t("b_month", lang, income=i18n.fmt_money(o["income"], cur), expense=i18n.fmt_money(o["expense"], cur)))
+            parts.append(i18n.t("b_month", lang, income=i18n.fmt_money(o["income"], cur, lang), expense=i18n.fmt_money(o["expense"], cur, lang)))
         if len(parts) == 1:
             parts.append(i18n.t("b_clear", lang))
         return ("" if lang == "zh" else " ").join(parts)
@@ -613,7 +728,7 @@ class Business:
         elif kind == "pay_bill":
             b = self.bill_view(target)
             if b["status"] != "pending":
-                raise ValidationError("That bill is already paid.")
+                raise ValidationError("That bill is already paid or its PayPal payment is in progress.")
             if not EMAIL_RE.match(b["payee_email"] or ""):
                 raise ValidationError(f"I need {b['payee']}'s PayPal email before paying. Ask the owner, then use add_bill or save_contact.")
             details = {"payee": b["payee"], "email": b["payee_email"], "amount": b["amount"], "currency": b["currency"], "description": b["description"]}
@@ -655,16 +770,18 @@ class Business:
         try:
             if row["kind"] == "send_invoice":
                 result = self.send_invoice(row["target"])
-                reply = i18n.t("c_send_invoice", lang, name=details["customer"], total=i18n.fmt_money(details["total"], details["currency"]))
+                reply = i18n.t("c_send_invoice", lang, name=details["customer"], total=i18n.fmt_money(details["total"], details["currency"], lang))
             elif row["kind"] == "cancel_invoice":
                 result = self.cancel_invoice(row["target"])
-                reply = i18n.t("c_cancel_invoice", lang, name=details["customer"], total=i18n.fmt_money(details["total"], details["currency"]))
+                reply = i18n.t("c_cancel_invoice", lang, name=details["customer"], total=i18n.fmt_money(details["total"], details["currency"], lang))
             else:
                 result = self.pay_bill_with_paypal(row["target"])
-                reply = i18n.t("c_pay_bill", lang, payee=details["payee"], amount=i18n.fmt_money(details["amount"], details["currency"]))
-        except (PayPalError, ValidationError) as e:
-            self.store.x("UPDATE confirmations SET status='failed', result=? WHERE id=?", (str(e)[:300], cid))
-            self.log("confirmation_failed", f"{row['kind']} failed: {e}", confirmation_id=cid)
-            return False, i18n.t("c_failed", lang, error=str(e)[:200]), {}
+                key = "c_pay_bill" if result.get("status") == "paid" else "c_pay_bill_pending"
+                reply = i18n.t(key, lang, payee=details["payee"], amount=i18n.fmt_money(details["amount"], details["currency"], lang))
+        except Exception as e:  # never leave a confirmation stuck in "executing"
+            err = str(e) if isinstance(e, (PayPalError, ValidationError)) else f"unexpected error ({e.__class__.__name__})"
+            self.store.x("UPDATE confirmations SET status='failed', result=? WHERE id=?", (err[:300], cid))
+            self.log("confirmation_failed", f"{row['kind']} failed: {err}", confirmation_id=cid)
+            return False, i18n.t("c_failed", lang, error=err[:200]), {}
         self.store.x("UPDATE confirmations SET status='done', result=? WHERE id=?", (json.dumps(result, ensure_ascii=False, default=str)[:2000], cid))
         return True, reply, result

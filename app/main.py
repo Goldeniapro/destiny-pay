@@ -71,10 +71,15 @@ def scheduler_tick() -> None:
             from datetime import date
             for b in store.q("SELECT * FROM bills WHERE ws=? AND status='pending' AND alerted=0 AND due_date=?",
                              (ws, date.fromordinal(tomorrow).isoformat())):
-                store.alert(ws, "a_bill_due", payee=b["payee"], amount=i18n.fmt_money(b["amount"], b["currency"]))
+                store.alert(ws, "a_bill_due", payee=b["payee"], amount=[b["amount"], b["currency"]])
                 store.x("UPDATE bills SET alerted=1 WHERE id=?", (b["id"],))
         except Exception:
             log.exception("refresh failed for a workspace")
+    for r in store.q("SELECT DISTINCT ws FROM payouts WHERE status NOT IN ('done','failed','unclaimed') AND checked_at<?", (now - 30,)):
+        try:
+            business_factory(r["ws"]).check_payouts()
+        except Exception:
+            log.exception("payout check failed for a workspace")
 
 
 def _scheduler_loop(stop: threading.Event) -> None:
@@ -133,6 +138,8 @@ limits = {
     "workspace_all": RateLimiter(_env_int("DP_WORKSPACES_GLOBAL_PER_MINUTE", 40)),
     "speech": RateLimiter(_env_int("DP_SPEECH_PER_MINUTE", 40)),
     "transcribe": RateLimiter(_env_int("DP_TRANSCRIBE_PER_MINUTE", 15)),
+    "transcribe_all": RateLimiter(_env_int("DP_TRANSCRIBE_GLOBAL_PER_MINUTE", 60)),
+    "chat_ws": RateLimiter(_env_int("DP_CHAT_PER_WORKSPACE_PER_MINUTE", 15)),
 }
 
 
@@ -141,10 +148,12 @@ def client_ip(request: Request) -> str:
     return fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "unknown")
 
 
-def limit(request: Request, *names: str) -> None:
+def limit(request: Request, *names: str, ws: str = "") -> None:
+    # The forwarded IP can be spoofed, so every per-IP limit is backed by a per-business or server-wide one.
     ip = client_ip(request)
     for name in names:
-        if not limits[name].allow("all" if name.endswith("_all") else ip):
+        key = "all" if name.endswith("_all") else ws if name.endswith("_ws") else ip
+        if not limits[name].allow(key):
             raise HTTPException(429, "Too many requests. Wait a minute and try again.")
 
 
@@ -216,8 +225,9 @@ def state(request: Request, ws: str = Query(**WS_ID), lang: str = "es", since: i
     lang = lang_of(lang)
     alerts = []
     for a in store.alerts_since(ws, max(since, 0)):
+        params = {k: (i18n.fmt_money(v[0], v[1], lang) if isinstance(v, list) and len(v) == 2 else v) for k, v in a["params"].items()}
         try:
-            text = i18n.t(a["key"], lang, **a["params"])
+            text = i18n.t(a["key"], lang, **params)
         except (KeyError, IndexError):
             continue
         alerts.append({"id": a["id"], "text": text, "key": a["key"], "speech_id": voice.register(text, lang)})
@@ -256,7 +266,7 @@ class ChatIn(BaseModel):
 
 @app.post("/api/chat")
 def chat(body: ChatIn, request: Request):
-    limit(request, "chat", "chat_all")
+    limit(request, "chat", "chat_all", "chat_ws", ws=body.workspace_id)
     open_business(body.workspace_id)
     text = body.message.strip()
     if not text:
@@ -278,7 +288,7 @@ class ConfirmIn(BaseModel):
 
 @app.post("/api/confirm")
 def confirm(body: ConfirmIn, request: Request):
-    limit(request, "chat")
+    limit(request, "chat", "chat_ws", ws=body.workspace_id)
     open_business(body.workspace_id)
     res = agent.confirm(body.workspace_id, body.conversation_id, body.confirmation_id, body.approve, lang_of(body.lang))
     res["speech_id"] = voice.register(res["reply"], lang_of(body.lang))
@@ -300,7 +310,7 @@ def speech(speech_id: str, request: Request):
 
 @app.post("/api/transcribe")
 async def transcribe(request: Request, workspace_id: str = Form(**WS_ID), lang: str = Form("es"), audio: UploadFile = File(...)):
-    limit(request, "transcribe")
+    limit(request, "transcribe", "transcribe_all")
     open_business(workspace_id)
     data = await audio.read(8 * 1024 * 1024 + 1)
     try:
@@ -339,8 +349,12 @@ async def paypal_webhook(request: Request):
         header = resource.get("batch_header") or {}
         batch_id = header.get("payout_batch_id") or resource.get("payout_batch_id")
         status_value = header.get("batch_status") or resource.get("transaction_status") or kind.rsplit(".", 1)[-1]
-        if batch_id:
-            store.x("UPDATE payouts SET status=? WHERE batch_id=?", (str(status_value)[:40], str(batch_id)))
+        row = store.one("SELECT ws FROM payouts WHERE batch_id=?", (str(batch_id),)) if batch_id else None
+        if row:  # PayPal's own status decides: settle the bill, or put it back to pending and tell the owner
+            try:
+                business_factory(row["ws"]).check_payouts()
+            except PayPalError:
+                log.warning("payout check after webhook failed for %s (%s)", batch_id, status_value)
     return {"ok": True}
 
 

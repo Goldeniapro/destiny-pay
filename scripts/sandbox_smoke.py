@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -84,6 +86,12 @@ def main() -> None:
         step("remind second invoice", lambda: pp.remind_invoice(inv2["id"], "Friendly reminder"))
         step("cancel second invoice", lambda: pp.cancel_invoice(inv2["id"], "Test cancel"))
         print("      ", summarize(pp.get_invoice(inv2["id"]))["status"], "(expected CANCELLED)")
+
+    supplier = os.environ.get("DP_SMOKE_PAYOUT_EMAIL", email)
+    batch = step(f"payout 1.00 to {supplier} (PayPal Payouts)", lambda: pp.create_payout(f"dp-smoke-{int(time.time())}", supplier, 1.00, note="Destiny Pay test"))
+    if batch:
+        print("      ", batch.get("batch_header", {}))
+        print("       If this failed with an authorization error, enable Payouts in your sandbox app's features.")
 
     print("\nALL GOOD" if ok else "\nSOME STEPS FAILED: send this output (it contains no secrets) to fix them.")
     sys.exit(0 if ok else 1)

@@ -40,6 +40,11 @@ T: dict[str, dict[str, str]] = {
                          "pt": "Pronto, cancelei a fatura de {name} de {total}.", "zh": "好了，我已取消 {name} 的 {total} 账单。", "fr": "C'est fait, j'ai annulé la facture de {name} de {total}."},
     "c_pay_bill": {"es": "Listo, le pagué {amount} a {payee} con PayPal.", "en": "Done, I paid {payee} {amount} with PayPal.",
                    "pt": "Pronto, paguei {amount} a {payee} com PayPal.", "zh": "好了，我已用 PayPal 向 {payee} 支付 {amount}。", "fr": "C'est fait, j'ai payé {amount} à {payee} avec PayPal."},
+    "c_pay_bill_pending": {"es": "Listo, envié el pago de {amount} a {payee} con PayPal. Te aviso cuando PayPal lo confirme.",
+                           "en": "Done, I sent the {amount} payment to {payee} with PayPal. I'll tell you when PayPal confirms it.",
+                           "pt": "Pronto, enviei o pagamento de {amount} a {payee} com PayPal. Aviso quando o PayPal confirmar.",
+                           "zh": "好了，我已用 PayPal 向 {payee} 发出 {amount} 的付款，PayPal 确认后我会告诉你。",
+                           "fr": "C'est fait, j'ai envoyé le paiement de {amount} à {payee} avec PayPal. Je vous préviens dès que PayPal le confirme."},
     "c_denied": {"es": "Entendido, no lo hago.", "en": "Understood, I won't do it.", "pt": "Entendido, não vou fazer.", "zh": "明白，我不执行。", "fr": "Compris, je ne le fais pas."},
     "c_failed": {"es": "No pude hacerlo: {error}", "en": "I couldn't do it: {error}", "pt": "Não consegui fazer: {error}", "zh": "没能完成：{error}", "fr": "Je n'ai pas pu le faire : {error}"},
     "c_gone": {"es": "Esa confirmación ya no está vigente. Pídemelo de nuevo, por favor.", "en": "That confirmation is no longer valid. Please ask me again.",
@@ -52,6 +57,19 @@ T: dict[str, dict[str, str]] = {
                             "pt": "Lembrei {name} da fatura de {total}, como você pediu.", "zh": "已按你的要求提醒 {name} 支付 {total} 的账单。", "fr": "J'ai rappelé à {name} sa facture de {total}, comme demandé."},
     "a_reminder_failed": {"es": "No pude enviar el recordatorio a {name}: {error}", "en": "I couldn't send the reminder to {name}: {error}",
                           "pt": "Não consegui enviar o lembrete a {name}: {error}", "zh": "没能给 {name} 发送提醒：{error}", "fr": "Je n'ai pas pu envoyer le rappel à {name} : {error}"},
+    "a_payout_done": {"es": "PayPal confirmó el pago de {amount} a {payee}.", "en": "PayPal confirmed the {amount} payment to {payee}.",
+                      "pt": "O PayPal confirmou o pagamento de {amount} a {payee}.", "zh": "PayPal 已确认向 {payee} 支付 {amount}。", "fr": "PayPal a confirmé le paiement de {amount} à {payee}."},
+    "a_payout_unclaimed": {"es": "El pago a {payee} salió, pero esa persona aún no lo reclama en PayPal.", "en": "The payment to {payee} went out, but they haven't claimed it in PayPal yet.",
+                           "pt": "O pagamento a {payee} saiu, mas a pessoa ainda não o resgatou no PayPal.", "zh": "给 {payee} 的付款已发出，但对方还没在 PayPal 领取。",
+                           "fr": "Le paiement à {payee} est parti, mais le bénéficiaire ne l'a pas encore réclamé sur PayPal."},
+    "a_payout_failed": {"es": "El pago a {payee} no se completó en PayPal. Lo dejé otra vez como pendiente.", "en": "The payment to {payee} didn't go through in PayPal. I marked the bill as pending again.",
+                        "pt": "O pagamento a {payee} não foi concluído no PayPal. Deixei a conta pendente de novo.", "zh": "给 {payee} 的付款在 PayPal 未完成，我已把这笔账单改回待付。",
+                        "fr": "Le paiement à {payee} n'a pas abouti sur PayPal. J'ai remis la facture en attente."},
+    "a_payout_unknown": {"es": "No pude confirmar si el pago a {payee} salió. Revísalo en PayPal antes de pagarle de otra forma.",
+                         "en": "I couldn't confirm whether the payment to {payee} went out. Check PayPal before paying them another way.",
+                         "pt": "Não consegui confirmar se o pagamento a {payee} saiu. Verifique no PayPal antes de pagar de outra forma.",
+                         "zh": "我无法确认给 {payee} 的付款是否已发出，请先在 PayPal 查看，再用其他方式付款。",
+                         "fr": "Je n'ai pas pu confirmer si le paiement à {payee} est parti. Vérifiez sur PayPal avant de payer autrement."},
     "a_bill_due": {"es": "Mañana vence el pago a {payee} por {amount}.", "en": "The {amount} payment to {payee} is due tomorrow.",
                    "pt": "Amanhã vence o pagamento a {payee} de {amount}.", "zh": "明天要付给 {payee} {amount}。", "fr": "Le paiement de {amount} à {payee} est dû demain."},
     # --- daily briefing ----------------------------------------------------------
@@ -86,8 +104,11 @@ def t(key: str, lang: str, **params) -> str:
     return text.format(**params) if params else text
 
 
-def fmt_money(amount: float, currency: str) -> str:
-    return f"{amount:,.2f} {currency}"
+def fmt_money(amount: float, currency: str, lang: str = "en") -> str:
+    text = f"{amount:,.2f}"
+    if lang in ("es", "pt", "fr"):  # 1.234,56 (fr uses a space for thousands)
+        text = text.replace(",", "_").replace(".", ",").replace("_", " " if lang == "fr" else ".")
+    return f"{text} {currency}"
 
 
 def fmt_date(d: date, lang: str) -> str:
@@ -100,59 +121,63 @@ def fmt_date(d: date, lang: str) -> str:
 
 
 # --- yes / no, decided by code ------------------------------------------------------
-# A spoken "yes" executes a money action only when it is short, clearly affirmative, has no
-# negation and no change request ("sí, pero cambia el monto" must go back to the agent).
-_YES = {
-    "es": "sí si dale confirmo confirmado confirma envíala envíalo envíale envía envia mándala mándalo manda adelante hazlo hágalo correcto ok okay listo claro perfecto paga págale pagale procede cancélala cancélalo cancela",
-    "en": "yes yeah yep yup sure confirm confirmed send go ahead do it ok okay correct right perfect pay proceed cancel it",
-    "pt": "sim pode confirmo confirmado confirma envia envie manda mande ok certo claro perfeito paga pague prossiga cancela",
-    "fr": "oui ouais d'accord confirme confirmé envoie envoyez vas-y allez-y ok parfait correct paie payez annule",
-}
-_NO = {
-    "es": "no nop espera espérate todavía detente nunca",
-    "en": "no nope wait stop don't dont not hold never",
-    "pt": "não nao espera pare ainda nunca",
-    "fr": "non attends attendez arrête pas jamais",
-}
-_CHANGE = {"pero", "cambia", "cambiar", "corrige", "corregir", "mejor", "en vez", "but", "change", "instead", "fix",
-           "mas", "mude", "troque", "corrija", "mais", "plutôt",
-           # timing changes go back to the agent too
-           "mañana", "luego", "después", "later", "tomorrow", "amanhã", "depois", "demain", "tard"}
-_ZH_YES = ("是", "好", "确认", "可以", "发送", "发吧", "对", "没问题", "行", "付款", "支付", "取消吧")
-_ZH_NO = ("不", "别", "等", "取消", "停")
+# A reply executes a money action only if EVERY word in it belongs to a small confirmation
+# vocabulary ("sí", "dale, envíala", "yes please send it"). Anything else (a question, a number,
+# a correction, another name, "send it to the other one") goes back to the agent. Any negation or
+# "cancel" word means no, which is always safe: nothing moves.
+_YES_WORDS = set("""
+sí si dale confirmo confirmado confirma ok okay listo claro perfecto correcto adelante hazlo procede vale ya exacto
+yes yeah yep yup sure confirm confirmed correct right perfect proceed absolutely ahead
+sim pode confirmo confirmado confirma certo claro perfeito isso
+oui ouais d'accord confirme confirmé parfait exactement vas-y allez-y
+""".split())
+_FILLER_WORDS = set("""
+bueno pues que por favor envíala envíalo envíale envía envia envíalos mándala mándalo manda mandala mándale págale pagale paga págalo pagalo
+eso así de acuerdo gracias destiny hazlo porfa
+please send it pay them that's thats fine thanks great go do destiny now
+favor envia envie manda mande paga pague enviar pagar obrigado obrigada agora
+s'il te plaît vous plaît plait envoie envoyez paie payez la le merci
+""".split())
+_NO_WORDS = set("""
+no nop nope espera espérate espere todavía detente nunca alto cancela cancelar cancélala cancélalo cancelalo cancelala anula
+not don't dont wait stop never hold cancel cancelled
+não nao pare ainda nunca cancele cancelar
+non attends attendez arrête jamais pas annule annuler
+""".split())
+_CANCEL_WORDS = {"cancela", "cancelar", "cancélala", "cancélalo", "cancelalo", "cancelala", "anula", "cancel", "cancele", "annule", "annuler"}
+_ZH_YES = ("确认", "没问题", "是的", "好的", "可以", "发送", "发吧", "付款", "支付", "是", "好", "对", "行")
+_ZH_FILLER = ("请", "吧", "嗯", "啊", "了", "呢", "发", "付", "就", "这样", "谢谢")
+_ZH_NO = ("不", "别", "等", "取消", "停", "没")
 
 
 def _words(text: str) -> list[str]:
-    return re.findall(r"[\w'’-]+", text.lower())
+    return re.findall(r"[\w'’-]+", text.lower().replace("’", "'"))
 
 
-def classify_reply(text: str) -> str:
-    """'yes', 'no' or 'other' for a reply to a pending confirmation."""
+def classify_reply(text: str, action: str = "") -> str:
+    """'yes', 'no' or 'other' for a reply to a pending confirmation of `action`."""
     raw = text.strip().lower()
-    if not raw:
+    if not raw or "?" in raw or "¿" in raw or "？" in raw or any(ch.isdigit() for ch in raw):
         return "other"
-    if any(ch.isdigit() for ch in raw):
-        return "other"  # numbers mean a correction ("sí, a 40 dólares")
-    if re.search(r"[一-鿿]", raw):
-        if any(w in raw for w in ("但是", "改", "换", "换成")):
-            return "other"
-        no = any(w in raw for w in _ZH_NO) and not raw.startswith("取消吧")
-        if no and not any(raw.startswith(y) for y in ("是", "好", "确认")):
+    if re.search(r"[\u4e00-\u9fff]", raw):
+        core = re.sub(r"[\s，。！、,.!]+", "", raw)
+        if action == "cancel_invoice":
+            core = core.replace("取消", "")
+        if any(w in core for w in _ZH_NO) and not core.startswith("没问题"):
             return "no"
-        if len(raw) <= 12 and any(w in raw for w in _ZH_YES):
-            return "yes"
-        return "other"
+        rest, found = core, False
+        for w in _ZH_YES + _ZH_FILLER:
+            if w in rest:
+                found = found or w in _ZH_YES
+                rest = rest.replace(w, "")
+        return "yes" if found and not rest and len(core) <= 12 else "other"
     words = _words(raw)
-    joined = " " + " ".join(words) + " "
-    no_words = {w for v in _NO.values() for w in v.split()}
-    # a "no" anywhere wins: cancelling is always safe, nothing moves
-    if words and (words[0] in no_words or (set(words) & {"no", "não", "nao", "non", "nope"})):
-        return "no"
-    if set(words) & (no_words - {"pas", "ainda", "todavía"}):
-        return "no"
-    if any(f" {c} " in joined for c in _CHANGE):
+    if not words:
         return "other"
-    yes_phrases = [p for v in _YES.values() for p in v.split()] + ["go ahead", "do it", "vas-y", "allez-y", "d'accord"]
-    if len(words) <= 8 and any(f" {p} " in joined for p in yes_phrases):
+    negatives = _NO_WORDS - (_CANCEL_WORDS if action == "cancel_invoice" else set())
+    if set(words) & negatives:
+        return "no"
+    allowed = _YES_WORDS | _FILLER_WORDS | (_CANCEL_WORDS if action == "cancel_invoice" else set())
+    if len(words) <= 8 and all(w in allowed for w in words) and any(w in _YES_WORDS for w in words):
         return "yes"
     return "other"

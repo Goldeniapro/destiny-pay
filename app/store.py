@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS bills(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ws TEXT NOT NULL, payee TEXT NOT NULL, payee_email TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '', amount REAL NOT NULL, currency TEXT NOT NULL, due_date TEXT NOT NULL,
   recurrence TEXT NOT NULL DEFAULT 'none', status TEXT NOT NULL DEFAULT 'pending', method TEXT NOT NULL DEFAULT '',
-  paid_at REAL, payout_batch_id TEXT NOT NULL DEFAULT '', alerted INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL);
+  paid_at REAL, payout_batch_id TEXT NOT NULL DEFAULT '', alerted INTEGER NOT NULL DEFAULT 0, anchor_day INTEGER NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS movements(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ws TEXT NOT NULL, kind TEXT NOT NULL, description TEXT NOT NULL,
   amount REAL NOT NULL, currency TEXT NOT NULL, method TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
@@ -55,7 +56,7 @@ CREATE TABLE IF NOT EXISTS confirmations(
   created_at REAL NOT NULL, resolved_at REAL);
 CREATE TABLE IF NOT EXISTS payouts(
   sender_batch_id TEXT PRIMARY KEY, ws TEXT NOT NULL, bill_id INTEGER NOT NULL, status TEXT NOT NULL,
-  batch_id TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL);
+  batch_id TEXT NOT NULL DEFAULT '', amount REAL NOT NULL DEFAULT 0, checked_at REAL NOT NULL DEFAULT 0, created_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS fake_paypal(id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS invoices_ws ON invoices(ws);
 CREATE INDEX IF NOT EXISTS bills_ws ON bills(ws);
@@ -78,6 +79,11 @@ class Store:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA busy_timeout=5000")
             self._db.executescript(SCHEMA)
+            for table, column, decl in (("bills", "anchor_day", "INTEGER NOT NULL DEFAULT 0"), ("payouts", "amount", "REAL NOT NULL DEFAULT 0"),
+                                        ("payouts", "checked_at", "REAL NOT NULL DEFAULT 0")):
+                cols = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})").fetchall()}
+                if column not in cols:  # older database: add the column in place
+                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     # --- low level -----------------------------------------------------------
     def q(self, sql: str, args: tuple = ()) -> list[dict]:

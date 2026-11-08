@@ -222,3 +222,33 @@ def test_every_tool_runs(setup):
     r = run_tool(biz, "conv", "create_reminder", {"text": "Banco", "due_at": (biz.now() + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M"),
                                                  "kind": "owner_note", "invoice_id": ""})[0]
     assert run_tool(biz, "conv", "cancel_reminder", {"reminder_id": r["id"]})[0]["status"] == "cancelled"
+
+
+def test_cancel_reply_never_pays(setup):
+    biz, make = setup
+    bill = biz.add_bill("Marta Quispe", "Alquiler", 300, biz.today().isoformat(), "monthly", "marta@example.com")
+    agent, client = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("¿Confirmas el pago de 300?"), text("Entendido.")])
+    agent.chat(biz.ws, "conv-c1", "Págale el alquiler a Marta", "en")
+    res = agent.chat(biz.ws, "conv-c1", "cancel the payment please", "en")
+    assert res["reply"] == "Understood, I won't do it." and biz.bill_view(bill["id"])["status"] == "pending"
+    assert biz.paypal.payouts == {}
+
+
+def test_question_after_card_goes_to_model(setup):
+    biz, make = setup
+    bill = biz.add_bill("Marta Quispe", "Alquiler", 300, biz.today().isoformat(), "monthly", "marta@example.com")
+    agent, client = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("¿Confirmas?"), text("Es para Marta Quispe.")])
+    agent.chat(biz.ws, "conv-c2", "Págale el alquiler a Marta", "es")
+    res = agent.chat(biz.ws, "conv-c2", "¿para quién es?", "es")
+    assert res["reply"] == "Es para Marta Quispe." and biz.bill_view(bill["id"])["status"] == "pending"
+
+
+def test_memory_snapshot_survives_reset_and_note(setup):
+    biz, make = setup
+    bad = anthropic.BadRequestError("bad", response=httpx.Response(400, request=httpx.Request("POST", "https://x")), body=None)
+    agent, client = make([tool("draft_invoice", DRAFT), lambda kw: tool("request_send_invoice", {"invoice_id": last_invoice(biz)["id"]}, "t2"), bad, text("ok")])
+    agent.chat(biz.ws, "conv-m", "Cóbrale a Sarah", "es")
+    conv = agent.conversations.peek("conv-m")
+    assert conv.messages == [] and conv.awaiting == ""  # the reset clears the pending voice confirmation
+    agent.chat(biz.ws, "conv-m", "hola", "es")
+    assert "<business_memory>" in client.requests[-1]["messages"][0]["content"][0]["text"]

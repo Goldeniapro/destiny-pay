@@ -38,10 +38,16 @@
   const t = k => I18N[lang][k];
   const money = (v, cur) => `${Number(v || 0).toLocaleString(lang === "zh" ? "zh-CN" : lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur || currency}`;
   const fmtDate = iso => { if (!iso) return ""; const d = new Date(iso.length <= 10 ? iso + "T12:00:00" : iso); return d.toLocaleDateString(lang === "zh" ? "zh-CN" : lang, { weekday: "short", day: "numeric", month: "short" }); };
+  const fmtShort = iso => { if (!iso) return ""; const d = new Date(iso + "T12:00:00"); return d.toLocaleDateString(lang === "zh" ? "zh-CN" : lang, { day: "numeric", month: "short" }); };
   const fmtWhen = iso => { const d = new Date(iso); return d.toLocaleString(lang === "zh" ? "zh-CN" : lang, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
 
-  async function api(path, opts) {
-    const r = await fetch(path, opts);
+  const withTimeout = (opts, ms) => {
+    const o = Object.assign({}, opts || {});
+    if (window.AbortSignal && AbortSignal.timeout) o.signal = AbortSignal.timeout(ms);
+    return o;
+  };
+  async function api(path, opts, ms) {
+    const r = await fetch(path, withTimeout(opts, ms || 45000));
     if (!r.ok) { const e = new Error("http " + r.status); e.status = r.status; throw e; }
     return r.json();
   }
@@ -134,18 +140,21 @@
   }
 
   function speak(text, speechId) {
+    cancelListening();  // never listen while speaking: the mic would hear Destiny's own voice
     if (muted || !text) { setState("idle"); return; }
     stopSpeaking();
     const token = ++speakToken;
     const done = () => { if (token !== speakToken) return; clearTimeout(speakTimer); if (state === "speaking") setState("idle"); };
+    let fellBack = false;
+    const fallback = () => { if (token !== speakToken || fellBack) return; fellBack = true; browserSpeak(text, token, done); };
     setState("speaking");
     clearTimeout(speakTimer);
     speakTimer = setTimeout(done, 6000 + text.length * 110);  // never stay stuck in "speaking"
     if (speechId && status && status.voice.tts) {
       player.onended = done;
-      player.onerror = () => { if (token === speakToken) browserSpeak(text, token, done); };
+      player.onerror = fallback;
       player.src = "/api/speech/" + encodeURIComponent(speechId);
-      player.play().catch(() => { if (token === speakToken) browserSpeak(text, token, done); });
+      player.play().catch(fallback);
     } else browserSpeak(text, token, done);
   }
 
@@ -208,18 +217,26 @@
     try { rec.start(); setState("listening"); } catch (e) { rec = null; setState("idle"); add("bot", t("v_generic")); }
   }
 
+  let starting = false;
   async function startRecording() {
-    try { recStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
-    catch (e) { add("bot", t(e && e.name === "NotFoundError" ? "v_nomic" : "v_denied")); return; }
+    if (starting || recorder) return;  // a second tap while the permission prompt is open
+    starting = true;
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+    catch (e) { starting = false; add("bot", t(e && e.name === "NotFoundError" ? "v_nomic" : "v_denied")); return; }
+    starting = false;
     const type = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"].find(x => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(x)) || "";
     chunks = []; recCancelled = false;
-    recorder = new MediaRecorder(recStream, type ? { mimeType: type } : undefined);
-    recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-    recorder.onstop = onRecordingStop;
-    recorder.start();
+    let r;
+    try { r = new MediaRecorder(stream, type ? { mimeType: type } : undefined); }
+    catch (e) { stream.getTracks().forEach(tr => tr.stop()); add("bot", t("v_generic")); return; }
+    recStream = stream; recorder = r;
+    r.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    r.onstop = onRecordingStop;
+    r.start();
     setState("listening");
-    watchSilence(recStream);
-    setTimeout(() => { if (recorder && recorder.state === "recording") recorder.stop(); }, 20000);
+    watchSilence(stream);
+    setTimeout(() => { if (r.state === "recording") r.stop(); }, 20000);  // this recorder only, never a newer one
   }
 
   function watchSilence(stream) {
@@ -247,7 +264,7 @@
     fd.append("workspace_id", ws); fd.append("lang", lang);
     fd.append("audio", blob, blob.type.includes("mp4") ? "speech.m4a" : blob.type.includes("ogg") ? "speech.ogg" : "speech.webm");
     try {
-      const r = await fetch("/api/transcribe", { method: "POST", body: fd });
+      const r = await fetch("/api/transcribe", withTimeout({ method: "POST", body: fd }, 45000));
       const data = r.ok ? await r.json() : null;
       setState("idle");
       if (data && data.text) send(data.text); else add("bot", t("v_nospeech"));
@@ -273,6 +290,7 @@
     busy = true; input.value = "";
     add("me", text);
     const wait = add("bot pending", t("st_thinking"));
+    wait.setAttribute("aria-hidden", "true");  // the status line already announces it
     setState("thinking");
     let data;
     try {
@@ -281,6 +299,7 @@
       data = { reply: t(e.status === 429 ? "rate" : e.status ? "server" : "offline"), error: "http" };
     }
     wait.remove();
+    epoch++;
     for (const a of data.actions || []) addAction(a);
     for (const u of data.ui || []) { if (u.qr_png_base64) showQR(u); if (u.confirmation) addCard(u.confirmation); }
     const reply = data.reply || t("server");
@@ -325,13 +344,14 @@
     $("cards").appendChild(box);
   }
 
-  function dropCard(id) { const el = $("cards").querySelector(`[data-id="${id}"]`); if (el) el.remove(); }
+  function dropCard(id) { const el = $("cards").querySelector(`[data-id="${id}"]`); if (el) el.remove(); shownCards.delete(id); }
 
   async function resolveCard(id, approve, box) {
-    unlockAudio(); stopSpeaking();
+    unlockAudio(); cancelListening(); stopSpeaking();
     box.querySelectorAll("button").forEach(b => b.disabled = true);
     try {
       const r = await post("/api/confirm", { workspace_id: ws, conversation_id: conv, confirmation_id: id, approve, lang });
+      epoch++;
       dropCard(id);
       add(r.done ? "bot alert" : "bot", r.reply);
       speak(r.reply, r.speech_id);
@@ -350,10 +370,11 @@
     for (const name of TABS) {
       const b = document.createElement("button"); b.type = "button"; b.className = "tab"; b.role = "tab";
       b.textContent = t("tab_" + name); b.setAttribute("aria-selected", name === tab ? "true" : "false");
-      b.addEventListener("click", () => { tab = name; store.set("dp_tab", tab); renderTabs(); });
+      b.id = "tab-" + name; b.setAttribute("aria-controls", "panel-" + name);
+      b.addEventListener("click", () => { tab = name; tabChosen = true; store.set("dp_tab", tab); renderTabs(); });
       box.appendChild(b);
     }
-    document.querySelectorAll(".panel").forEach(p => { p.hidden = p.dataset.panel !== tab; });
+    document.querySelectorAll(".panel").forEach(p => { p.hidden = p.dataset.panel !== tab; p.id = "panel-" + p.dataset.panel; p.setAttribute("role", "tabpanel"); p.setAttribute("aria-labelledby", "tab-" + p.dataset.panel); });
   }
 
   function kpi(label, value, foot, cls, footCls) {
@@ -411,7 +432,7 @@
   function statusPill(p) {
     const r = p.data; if (!r) return "";
     const key = r.overdue ? "overdue" : r.status;
-    const cls = r.overdue ? "bad" : PAID.has(r.status) || r.status === "paid" ? "ok" : OPEN.has(r.status) || r.status === "pending" ? "warn" : BAD.has(r.status) ? "bad" : "";
+    const cls = r.overdue ? "bad" : PAID.has(r.status) || r.status === "paid" ? "ok" : OPEN.has(r.status) || r.status === "pending" || r.status === "processing" ? "warn" : BAD.has(r.status) ? "bad" : "";
     return pill(t("status")[key] || r.status, cls);
   }
   function invoiceActions(p) {
@@ -432,21 +453,21 @@
   }
   function columns(name) {
     const m = p => p.value == null ? "" : money(p.value, p.data && p.data.currency);
-    const d = p => fmtDate(p.value);
+    const d = p => fmtShort(p.value);
     if (name === "invoices") return [
       { field: "customer", headerName: t("col_customer"), flex: 1.2, minWidth: 110 },
-      { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: 100, flex: 0.9 },
-      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 100, flex: 0.9 },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 115, flex: 1 },
-      { headerName: t("col_actions"), cellRenderer: invoiceActions, minWidth: 190, flex: 1.5, sortable: false, filter: false },
+      { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: 115, flex: 0.9 },
+      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 95, flex: 0.8 },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 120, flex: 1 },
+      { headerName: t("col_actions"), cellRenderer: invoiceActions, width: 230, sortable: false },
     ];
     if (name === "bills") return [
-      { field: "payee", headerName: t("col_payee"), flex: 1.2, minWidth: 110 },
-      { field: "description", headerName: t("col_desc"), flex: 1.3, minWidth: 120, valueFormatter: p => [p.value, t("recurrence")[p.data.recurrence]].filter(Boolean).join(" · ") },
-      { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 95, flex: 0.9 },
-      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 95, flex: 0.9, sort: "asc" },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 100, flex: 0.9 },
-      { headerName: t("col_actions"), cellRenderer: billActions, minWidth: 140, flex: 1.1, sortable: false, filter: false },
+      { field: "payee", headerName: t("col_payee"), flex: 1.1, minWidth: 120 },
+      { field: "description", headerName: t("col_desc"), flex: 1.2, minWidth: 120, valueFormatter: p => [p.value, t("recurrence")[p.data.recurrence]].filter(Boolean).join(" · ") },
+      { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 115, flex: 0.9 },
+      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 95, flex: 0.8, sort: "asc" },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 105, flex: 0.9 },
+      { headerName: t("col_actions"), cellRenderer: billActions, width: 160, sortable: false },
     ];
     return [
       { field: "name", headerName: t("col_name"), flex: 1.2, minWidth: 140 },
@@ -460,7 +481,7 @@
     if (grids[name] && grids[name].__lang !== lang) { grids[name].destroy(); delete grids[name]; }  // rebuild so headers and texts follow the language
     if (!grids[name]) {
       grids[name] = agGrid.createGrid(el, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name),
-        defaultColDef: { sortable: true, filter: true, resizable: true }, animateRows: true, rowHeight: 40,
+        defaultColDef: { sortable: true, filter: false, resizable: true }, animateRows: true, rowHeight: 40,
         localeText: { noRowsToShow: t("no_rows"), loadingOoo: "…" } });
       grids[name].__lang = lang; grids[name].__json = JSON.stringify(rows);
     } else {
@@ -477,7 +498,9 @@
   }
   function li(when, text) { const el = document.createElement("li"); if (when) { const w = document.createElement("span"); w.className = "when"; w.textContent = when; el.appendChild(w); } el.append(text); return el; }
 
+  let tabChosen = !!store.get("dp_tab");
   function render(s) {
+    if (!lastState && !tabChosen && !s.invoices.length && s.bills.length) { tab = "bills"; renderTabs(); }
     lastState = s; currency = s.business.currency;
     $("biz-name").textContent = s.business.name;
     $("sample-badge").hidden = !s.business.sample; $("sample-badge").textContent = t("sample");
@@ -488,22 +511,28 @@
     renderList("memory", s.facts, t("empty_memory"), f => li("", "🧠 " + f));
     for (const c of s.confirmations) addCard(cardFromState(c));
     const live = new Set(s.confirmations.map(c => c.id));
-    $("cards").querySelectorAll(".conf").forEach(el => { if (!live.has(el.dataset.id)) el.remove(); });
+    $("cards").querySelectorAll(".conf").forEach(el => { if (!live.has(el.dataset.id)) { shownCards.delete(el.dataset.id); el.remove(); } });
   }
 
-  let refreshing = false, firstLoad = true;
+  let refreshing = false, firstLoad = true, epoch = 0, again = false;
   async function refresh() {
-    if (!ws || refreshing) return;
+    if (!ws) { try { await createWorkspace(); } catch (e) { /* shown at start */ } return; }
+    if (refreshing) { again = true; return; }  // run once more after the current poll instead of dropping it
     refreshing = true;
+    const myEpoch = epoch;
     try {
-      const s = await api(`/api/state?ws=${ws}&lang=${lang}&since=${lastAlert}`);
+      const s = await api(`/api/state?ws=${ws}&lang=${lang}&since=${lastAlert}`, undefined, 15000);
+      if (myEpoch !== epoch) { again = true; return; }  // a chat or confirmation happened meanwhile: this snapshot is stale
       render(s);
       if (!firstLoad) for (const a of s.alerts) { add("bot alert", a.text); sayWhenIdle(a.text, a.speech_id); }
       firstLoad = false;  // alerts from before this visit are not replayed
       lastAlert = Math.max(lastAlert, s.last_alert_id || 0);
     } catch (e) {
-      if (e.status === 404) { await createWorkspace(); }
-    } finally { refreshing = false; }
+      if (e.status === 404) { refreshing = false; await createWorkspace(); }
+    } finally {
+      refreshing = false;
+      if (again) { again = false; setTimeout(refresh, 50); }
+    }
   }
 
   function showQR(u) {
@@ -539,6 +568,7 @@
   }
 
   $("lang").addEventListener("change", async e => {
+    if (busy) { e.target.value = lang; return; }  // wait for the reply in flight
     cancelListening(); queue = []; stopSpeaking();
     lang = I18N[e.target.value] ? e.target.value : "en"; store.set("dp_lang", lang);
     newConversation(false);  // the assistant's language is fixed per conversation; memory stays
@@ -561,7 +591,13 @@
     try { status = await api("/api/status"); } catch (e) { status = { demo_mode: true, voice: { tts: false, stt: false }, ai_ready: false }; }
     if (!SR && !serverSTT()) mic.disabled = true;
     applyTexts();
-    if (!ws) await createWorkspace(); else await refresh();
+    try {
+      if (!ws) await createWorkspace(); else await refresh();
+    } catch (e) {
+      add("bot", t(e.status === 429 ? "rate" : "offline"));
+      const retry = setInterval(async () => { try { await createWorkspace(); clearInterval(retry); briefing(); } catch (err) { /* keep trying */ } }, 20000);
+      return;
+    }
     if (!ws) return;
     briefing();
   })();

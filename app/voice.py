@@ -33,6 +33,8 @@ class Voice:
         self.model = model or os.environ.get("FISH_MODEL", "s2.1-pro")
         self.asr_model = os.environ.get("FISH_ASR_MODEL", "transcribe-1-pro")
         self.daily_bytes = int(os.environ.get("DP_TTS_DAILY_BYTES", "2000000"))  # ~US$30/day at US$15 per million bytes
+        self.daily_audio = int(os.environ.get("DP_STT_DAILY_BYTES", "300000000"))  # uploaded audio per day for transcription
+        self._audio_day, self._audio_used = time.strftime("%Y-%m-%d"), 0
         self._http = httpx.Client(base_url=FISH_URL, timeout=httpx.Timeout(60, connect=10), transport=transport)
         self._texts: OrderedDict[str, tuple[str, str, float]] = OrderedDict()  # speech id -> (text, lang, created)
         self._audio: OrderedDict[str, bytes] = OrderedDict()  # sha(text, voice) -> mp3, for repeated phrases
@@ -99,7 +101,7 @@ class Voice:
             detail = resp.read()[:200]
             resp.close()
             raise VoiceError(f"voice service error {resp.status_code}: {detail!r}")
-        return self._relay(resp, key, len(text) <= 300)
+        return self._relay(resp, key, True)  # replaying an id never pays twice
 
     def _relay(self, resp: httpx.Response, key: str, cache: bool) -> Iterator[bytes]:
         chunks: list[bytes] = []
@@ -114,7 +116,7 @@ class Voice:
         if cache and chunks:
             with self._lock:
                 self._audio[key] = b"".join(chunks)
-                while len(self._audio) > 300:
+                while len(self._audio) > 400:
                     self._audio.popitem(last=False)
 
     # --- speech-to-text ---------------------------------------------------------------
@@ -123,6 +125,13 @@ class Voice:
             raise VoiceError("speech-to-text is not configured")
         if not audio or len(audio) > 8 * 1024 * 1024:
             raise VoiceError("audio is empty or too large")
+        with self._lock:
+            today = time.strftime("%Y-%m-%d")
+            if today != self._audio_day:
+                self._audio_day, self._audio_used = today, 0
+            if self._audio_used + len(audio) > self.daily_audio:
+                raise VoiceError("daily transcription budget reached")
+            self._audio_used += len(audio)
         try:
             r = self._http.post("/v1/asr", headers={"Authorization": f"Bearer {self.api_key}", "model": self.asr_model},
                                 files={"audio": (filename or "speech.webm", audio, mime or "audio/webm")},

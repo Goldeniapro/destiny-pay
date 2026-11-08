@@ -284,10 +284,10 @@ class DestinyPayAgent:
             conv.awaiting = ""
             if asked:
                 target = next((p for p in biz.pending_confirmations() if p["id"] == asked), None)
-                verdict = classify_reply(user_text) if target else "other"
+                verdict = classify_reply(user_text, target["kind"]) if target else "other"
                 if verdict in ("yes", "no"):
                     done, reply, result = biz.resolve_confirmation(asked, verdict == "yes", lang)
-                    self._note(conv, user_text, reply)
+                    self._note(conv, biz, user_text, reply)
                     return {"reply": reply, "actions": [{"tool": "confirmation", "result": {"done": done, "action": target["kind"]}}],
                             "ui": [], "confirmed": asked}
             if conv.turns >= MAX_TURNS_PER_CONVERSATION:
@@ -310,17 +310,17 @@ class DestinyPayAgent:
             try:
                 if conv.awaiting == confirmation_id:
                     conv.awaiting = ""
-                self._note(conv, f"[The owner pressed {'Confirm' if approve else 'Cancel'} on the card]", reply)
+                self._note(conv, biz, f"[The owner pressed {'Confirm' if approve else 'Cancel'} on the card]", reply)
             finally:
                 conv.lock.release()
         return {"done": done, "reply": reply}
 
-    @staticmethod
-    def _note(conv: Conversation, user_text: str, reply: str) -> None:
+    def _note(self, conv: Conversation, biz: Business, user_text: str, reply: str) -> None:
         """Keep the model aware of what the app did, as a normal user/assistant exchange."""
         if conv.messages and conv.messages[-1]["role"] == "user":
             return  # never break alternation
-        conv.messages.append({"role": "user", "content": [{"type": "text", "text": user_text}]})
+        content = self._user_content(conv, biz, user_text, [])  # adds the memory snapshot if this opens the conversation
+        conv.messages.append({"role": "user", "content": content})
         conv.messages.append({"role": "assistant", "content": [{"type": "text", "text": reply}]})
 
     # --- the loop ----------------------------------------------------------------------
@@ -369,6 +369,7 @@ class DestinyPayAgent:
             except anthropic.BadRequestError:
                 result = fail("api_error")  # the stored history may be unusable: start it fresh (memory is in the database)
                 messages.clear()
+                conv.awaiting = ""
                 return result
             except anthropic.AnthropicError:
                 return fail("api_error")
