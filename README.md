@@ -39,7 +39,7 @@ Micro and small businesses are about 99% of all companies in Latin America ([CEP
 - **Sandbox only.** Live PayPal is refused unless explicitly enabled.
 
 ## Voice that holds up at a busy counter
-- **One brand voice in all three languages** (Fish Audio), streamed so speech starts in about half a second; the browser's own voice is the automatic fallback.
+- **A native voice per language** (Fish Audio), chosen by measuring clarity with real transcriptions and streamed so speech starts in about half a second; the browser's own voice is the automatic fallback.
 - **Dictation with alternatives**: the agent sees the recognizer's alternatives to pick the right name or number, and reads every item and total back before anything is sent.
 - **Fallback transcription** (server speech-to-text) when browser dictation fails or isn't available, with automatic end-of-speech detection.
 - Clear states (listening, thinking, speaking), tap to interrupt, no listening while speaking (no echo), queued alerts that never cut a reply, a mute button, and typing always works.
@@ -54,7 +54,7 @@ FastAPI ── rate limits · budgets · background scheduler · verified PayPal
    ├── Claude (claude-opus-5-5) tool loop: 20 strict tools, prompt caching, server-side fallback
    ├── Business layer: memory, confirmations, ledger, reminders, financial overview  ──►  SQLite
    ├── PayPal REST: Invoicing v2 · Payouts · Webhooks verification (sandbox)
-   └── Fish Audio: text-to-speech (one voice, 3 languages) · speech-to-text
+   └── Fish Audio: text-to-speech (a native voice per language) · speech-to-text
 ```
 | File | What it holds |
 |---|---|
@@ -87,7 +87,7 @@ python scripts/sandbox_smoke.py buyer@personal.example.com   # real PayPal sandb
 ```
 
 ## Deploy
-`render.yaml` is a ready Render Blueprint with a persistent disk for the memory. Add `ANTHROPIC_API_KEY`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, and optionally `FISH_API_KEY`, `FISH_VOICE_ID` and `PAYPAL_WEBHOOK_ID` (webhook URL: `https://<your-app>/api/paypal/webhook`).
+`render.yaml` is a ready Render Blueprint with a persistent disk for the memory. Add `ANTHROPIC_API_KEY`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, and optionally `FISH_API_KEY` and `PAYPAL_WEBHOOK_ID` (the voice ids per language are already in the blueprint) (webhook URL: `https://<your-app>/api/paypal/webhook`).
 
 ## Roadmap
 - WhatsApp channel: talk to Destiny Pay where small sellers already work.
