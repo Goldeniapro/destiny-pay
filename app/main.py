@@ -13,7 +13,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import i18n
@@ -93,6 +95,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Destiny Pay", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
 # --- abuse limits -----------------------------------------------------------------------------

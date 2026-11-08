@@ -565,7 +565,7 @@ class Business:
     def briefing(self, lang: str) -> str:
         o = self.overview("month")
         hour = self.now().hour
-        parts = [i18n.t("b_morning" if hour < 12 else "b_afternoon" if hour < 19 else "b_evening", lang) + "."]
+        parts = [i18n.t("b_morning" if hour < 12 else "b_afternoon" if hour < 19 else "b_evening", lang) + ("。" if lang == "zh" else ".")]
         cur = self.currency
         if o["open_invoices"]:
             parts.append(i18n.t("b_receivable", lang, amount=i18n.fmt_money(o["receivable"], cur), n=o["open_invoices"]))
@@ -587,7 +587,7 @@ class Business:
             parts.append(i18n.t("b_month", lang, income=i18n.fmt_money(o["income"], cur), expense=i18n.fmt_money(o["expense"], cur)))
         if len(parts) == 1:
             parts.append(i18n.t("b_clear", lang))
-        return " ".join(parts)
+        return ("" if lang == "zh" else " ").join(parts)
 
     def memory_snapshot(self) -> str:
         """Compact business memory given to the agent at the start of each conversation."""
