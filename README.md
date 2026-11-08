@@ -6,7 +6,10 @@
 
 Millions of small sellers in Latin America run their business from a phone, WhatsApp and a notebook.
 Getting paid is manual: they type amounts, forget who owes them and rarely send reminders.
-Destiny Pay lets the owner just **talk**, in Spanish, English or Portuguese:
+Destiny Pay is built first for the ones who charge **foreign customers in dollars**: tour guides, artisan shops,
+guesthouses and freelancers. A PayPal invoice reaches any email in the world, even customers without a PayPal account.
+The same voice notebook also tracks local cash and mobile-wallet payments, so the owner knows who still owes them.
+The owner just **talks**, in Spanish, English or Portuguese:
 
 > 🗣️ "Cóbrale a Juan Pérez 3 cajas de té a 12 dólares, su correo es juan arroba correo punto com"
 >
@@ -45,6 +48,11 @@ No microphone? Type in the box: it is the same agent.
 - **Tool results are data, not instructions.** Every tool call gets a result, errors are explained in plain words, and a failed turn is rolled back so the conversation never breaks.
 - **Bounded cost.** Per-IP and global rate limits, a per-session turn cap and a daily token budget protect the public demo.
 - **Sandbox only.** Live PayPal is refused unless explicitly enabled with `ALLOW_LIVE=1`.
+
+## Why not just a chatbot with a PayPal connector?
+A general assistant can already create a PayPal invoice if you type the right request. Destiny Pay is a cashier, built for the counter:
+hands-free voice in three languages, a draft that is read back before anything is sent, the payment QR on screen,
+offline payments in the same ledger, "who owes me" at a glance, and a spoken alert the moment a customer pays.
 
 ## Voice that holds up in a real shop
 - Browser speech recognition (no app, no install), with live transcription while you speak.
