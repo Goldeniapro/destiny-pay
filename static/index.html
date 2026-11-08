@@ -1,102 +1,547 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Destiny Pay</title>
+<meta name="description" content="Destiny Pay: a multilingual voice cashier that bills customers with PayPal invoices.">
 <style>
-  :root { --bg:#0f1220; --card:#1a1f35; --text:#eef0f7; --muted:#9aa3c0; --accent:#ffc439; --ok:#3ecf8e; --warn:#f5a524; --bad:#ef5d5d; }
+  :root {
+    --bg:#f5f6fa; --card:#ffffff; --text:#151a2d; --muted:#5d6681; --line:#e2e5ef;
+    --accent:#2f6fed; --accent-text:#ffffff; --me:#e8efff; --bot:#f3f4f8;
+    --ok:#12805c; --ok-bg:#e3f6ee; --warn:#9a5b00; --warn-bg:#fff3dc; --bad:#c22f2f; --bad-bg:#fde8e8;
+    --idle:#2f6fed; --listen:#d63c3c; --think:#7a5af5; --speak:#12805c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0f1220; --card:#181d31; --text:#eef0f7; --muted:#9aa3c0; --line:#2a3152;
+      --accent:#5b8cff; --accent-text:#0b1020; --me:#26305a; --bot:#11152a;
+      --ok:#4cd6a0; --ok-bg:#123327; --warn:#ffc266; --warn-bg:#3a2a0c; --bad:#ff7b7b; --bad-bg:#3a1515;
+      --idle:#5b8cff; --listen:#ff6b6b; --think:#a48bff; --speak:#4cd6a0;
+    }
+  }
   * { box-sizing: border-box; }
-  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
-  header { padding:20px 16px 8px; max-width:960px; margin:auto; }
-  h1 { margin:0; font-size:1.6rem; } h1 span { color:var(--accent); }
-  header p { margin:4px 0 0; color:var(--muted); }
-  main { display:grid; grid-template-columns: 1fr 1fr; gap:16px; padding:16px; max-width:960px; margin:auto; }
-  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
-  .card { background:var(--card); border-radius:14px; padding:16px; }
-  #log { height:380px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; }
-  .msg { padding:8px 12px; border-radius:10px; max-width:85%; line-height:1.35; }
-  .me { align-self:flex-end; background:#2c3560; } .bot { align-self:flex-start; background:#11152a; border:1px solid #2c3560; }
-  .action { align-self:flex-start; font-size:.8rem; color:var(--muted); }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  header { max-width:1040px; margin:auto; padding:18px 16px 4px; display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
+  h1 { margin:0; font-size:1.55rem; letter-spacing:-.01em; }
+  h1 b { color:var(--accent); }
+  .tagline { margin:4px 0 0; color:var(--muted); max-width:620px; }
+  .controls { display:flex; gap:8px; align-items:center; }
+  select, .icon-btn { font:inherit; padding:8px 10px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); cursor:pointer; }
+  .badge { display:inline-block; font-size:.75rem; padding:3px 10px; border-radius:99px; background:var(--bot); color:var(--muted); border:1px solid var(--line); vertical-align:middle; margin-left:6px; }
+  .notice { max-width:1040px; margin:8px auto 0; padding:0 16px; }
+  .notice p { margin:0; padding:10px 14px; border-radius:12px; background:var(--warn-bg); color:var(--warn); font-size:.9rem; }
+  main { display:grid; grid-template-columns: minmax(0,1.1fr) minmax(0,1fr); gap:16px; padding:16px; max-width:1040px; margin:auto; }
+  @media (max-width: 820px) { main { grid-template-columns: minmax(0,1fr); } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; min-width:0; }
+  .card h2 { margin:0 0 10px; font-size:1.05rem; }
+  .voice { display:flex; align-items:center; gap:14px; margin-bottom:12px; }
+  #mic { width:68px; height:68px; flex:none; border-radius:50%; border:0; cursor:pointer; background:var(--idle); color:#fff; font-size:1.7rem; box-shadow:0 4px 14px rgba(0,0,0,.18); transition:transform .15s, background .2s; }
+  #mic:hover { transform:scale(1.04); }
+  #mic:disabled { opacity:.45; cursor:not-allowed; transform:none; }
+  #mic[data-state="listening"] { background:var(--listen); animation:pulse 1.2s infinite; }
+  #mic[data-state="thinking"] { background:var(--think); }
+  #mic[data-state="speaking"] { background:var(--speak); }
+  @keyframes pulse { 0% { box-shadow:0 0 0 0 rgba(214,60,60,.55); } 70% { box-shadow:0 0 0 16px rgba(214,60,60,0); } 100% { box-shadow:0 0 0 0 rgba(214,60,60,0); } }
+  @media (prefers-reduced-motion: reduce) { #mic[data-state="listening"] { animation:none; } }
+  #status { font-weight:600; }
+  #status-hint { color:var(--muted); font-size:.88rem; margin-top:2px; }
+  #log { height:360px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding:4px 2px; }
+  .msg { padding:9px 12px; border-radius:12px; max-width:88%; line-height:1.4; overflow-wrap:anywhere; }
+  .me { align-self:flex-end; background:var(--me); }
+  .bot { align-self:flex-start; background:var(--bot); border:1px solid var(--line); }
+  .bot.pending { color:var(--muted); font-style:italic; }
+  .bot.paid { background:var(--ok-bg); color:var(--ok); border-color:transparent; font-weight:600; }
+  .act { align-self:flex-start; font-size:.78rem; padding:3px 10px; border-radius:99px; background:var(--ok-bg); color:var(--ok); }
+  .act.err { background:var(--bad-bg); color:var(--bad); }
   form { display:flex; gap:8px; margin-top:12px; }
-  input { flex:1; padding:12px; border-radius:10px; border:1px solid #2c3560; background:#11152a; color:var(--text); font-size:1rem; }
-  button { padding:12px 16px; border:0; border-radius:10px; font-weight:600; cursor:pointer; }
-  #mic { background:var(--accent); color:#111; font-size:1.1rem; } #mic.on { background:var(--bad); color:#fff; }
-  #send { background:#2c3560; color:var(--text); }
+  #t { flex:1; min-width:0; padding:12px; border-radius:12px; border:1px solid var(--line); background:var(--bg); color:var(--text); font-size:1rem; }
+  #send { padding:12px 16px; border:0; border-radius:12px; font-weight:600; cursor:pointer; background:var(--accent); color:var(--accent-text); }
+  #send:disabled { opacity:.5; cursor:wait; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+  .chip { font:inherit; font-size:.82rem; padding:6px 10px; border-radius:99px; border:1px solid var(--line); background:var(--bg); color:var(--text); cursor:pointer; text-align:left; }
+  .chip:hover { border-color:var(--accent); }
   table { width:100%; border-collapse:collapse; font-size:.9rem; }
-  th, td { text-align:left; padding:6px 4px; border-bottom:1px solid #2c3560; }
-  .st { font-weight:600; } .PAID,.MARKED_AS_PAID { color:var(--ok); } .SENT,.UNPAID,.PARTIALLY_PAID { color:var(--warn); } .CANCELLED { color:var(--bad); }
-  .hint { color:var(--muted); font-size:.85rem; margin-top:8px; }
-  .badge { display:inline-block; font-size:.75rem; padding:2px 8px; border-radius:99px; background:#2c3560; margin-left:8px; vertical-align:middle; }
-  a { color:var(--accent); }
+  th, td { text-align:left; padding:8px 4px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { color:var(--muted); font-weight:600; font-size:.8rem; }
+  td.num { white-space:nowrap; }
+  .pill { display:inline-block; padding:2px 9px; border-radius:99px; font-size:.78rem; font-weight:600; background:var(--bot); color:var(--muted); }
+  .pill.ok { background:var(--ok-bg); color:var(--ok); } .pill.warn { background:var(--warn-bg); color:var(--warn); } .pill.bad { background:var(--bad-bg); color:var(--bad); }
+  .row-actions { display:flex; flex-wrap:wrap; gap:6px; }
+  .row-actions a, .row-actions button { font:inherit; font-size:.8rem; color:var(--accent); background:none; border:1px solid var(--line); border-radius:8px; padding:3px 8px; cursor:pointer; text-decoration:none; }
+  .empty { color:var(--muted); font-size:.9rem; padding:12px 0; }
+  #qr { margin-top:16px; padding:14px; border-radius:14px; border:1px dashed var(--line); text-align:center; }
+  #qr[hidden] { display:none; }
+  #qr img { width:220px; height:220px; image-rendering:pixelated; background:#fff; border-radius:8px; padding:8px; }
+  #qr .demo-qr { padding:18px; color:var(--muted); font-size:.9rem; }
+  #qr-close { float:right; }
+  footer { max-width:1040px; margin:0 auto 24px; padding:0 16px; color:var(--muted); font-size:.8rem; }
+  .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Destiny <span>Pay</span> <span id="mode" class="badge"></span></h1>
-  <p>Tu cajera por voz: cobra, consulta y recuerda pagos con PayPal hablando en español.</p>
+  <div>
+    <h1>Destiny <b>Pay</b> <span id="mode" class="badge"></span></h1>
+    <p class="tagline" id="tagline"></p>
+  </div>
+  <div class="controls">
+    <label class="sr-only" for="lang" id="lang-label">Language</label>
+    <select id="lang">
+      <option value="es">Español</option>
+      <option value="en">English</option>
+      <option value="pt">Português</option>
+    </select>
+    <button type="button" class="icon-btn" id="mute" aria-pressed="false">🔊</button>
+  </div>
 </header>
+<div class="notice" id="notice" hidden><p id="notice-text"></p></div>
 <main>
-  <section class="card">
-    <div id="log"></div>
+  <section class="card" aria-labelledby="talk-title">
+    <h2 id="talk-title" class="sr-only">Destiny Pay</h2>
+    <div class="voice">
+      <button type="button" id="mic" data-state="idle">🎙️</button>
+      <div>
+        <div id="status" aria-live="polite"></div>
+        <div id="status-hint"></div>
+      </div>
+    </div>
+    <div id="log" role="log" aria-live="polite"></div>
     <form id="f">
-      <button type="button" id="mic" title="Hablar">🎙️</button>
-      <input id="t" placeholder='Ej.: "Cóbrale a Juan Pérez 3 cajas de té a 12 dólares, juan@correo.com"' autocomplete="off">
-      <button id="send">Enviar</button>
+      <label class="sr-only" for="t" id="t-label">Message</label>
+      <input id="t" autocomplete="off" maxlength="2000">
+      <button id="send" type="submit"></button>
     </form>
-    <p class="hint">Prueba: "¿Quién me debe?" · "Recuérdale a Juan" · "Cancela la factura de Juan" · "¿Ya pagó Juan?"</p>
+    <div class="chips" id="chips"></div>
   </section>
-  <section class="card">
-    <h3 style="margin-top:0">Facturas</h3>
-    <table><thead><tr><th>Cliente</th><th>Total</th><th>Estado</th><th></th></tr></thead><tbody id="inv"></tbody></table>
+  <section class="card" aria-labelledby="inv-title">
+    <h2 id="inv-title"></h2>
+    <table>
+      <thead><tr><th id="th-client"></th><th id="th-total"></th><th id="th-status"></th><th id="th-actions"></th></tr></thead>
+      <tbody id="inv"></tbody>
+    </table>
+    <div class="empty" id="empty"></div>
+    <div id="qr" hidden>
+      <button type="button" class="icon-btn" id="qr-close">✕</button>
+      <h2 id="qr-title"></h2>
+      <div id="qr-body"></div>
+      <div class="row-actions" id="qr-link" style="justify-content:center;margin-top:8px"></div>
+    </div>
   </section>
 </main>
+<footer id="footer"></footer>
 <script>
-const sid = crypto.randomUUID();
-const log = document.getElementById('log'), input = document.getElementById('t'), mic = document.getElementById('mic');
+"use strict";
+const I18N = {
+  es: {
+    tagline: "Tu cajera por voz: cobra a tus clientes con facturas de PayPal, revisa quién te debe y registra pagos, solo hablando.",
+    placeholder: "Escribe o toca el micrófono…", send: "Enviar", lang: "Idioma", message: "Mensaje",
+    mic_start: "Hablar", mic_stop: "Dejar de escuchar", mute: "Silenciar voz", unmute: "Activar voz",
+    st_idle: "Toca el micrófono y habla", st_listening: "Te escucho…", st_thinking: "Pensando…", st_speaking: "Hablando… (toca para interrumpir)",
+    hint: "Di el nombre, el correo y lo que vendiste. Te pediré confirmar antes de enviar.",
+    thinking: "Pensando…",
+    greet: "Hola, soy Destiny Pay. Dime a quién le cobro, su correo y qué le vendiste.",
+    examples: ["Cóbrale a Juan Pérez 3 cajas de té a 12 dólares, su correo es juan arroba correo punto com", "Sí, envíala", "¿Quién me debe?", "Muéstrame el QR de Juan", "Juan me pagó 10 dólares en efectivo", "¿Ya pagó Juan?"],
+    invoices: "Facturas de esta sesión", th_client: "Cliente", th_total: "Total", th_status: "Estado", th_actions: "",
+    empty: "Aún no hay facturas. Pide tu primer cobro.", pay: "Link de pago", show_qr: "QR", simulate: "Simular pago",
+    qr_title: "Escanea para pagar con PayPal", qr_demo: "En modo demo no hay QR real. Con PayPal Sandbox aquí aparece el QR de pago de la factura.", close: "Cerrar",
+    paid: (n, t) => `¡${n} te pagó ${t} con PayPal!`,
+    rate: "Vas muy rápido. Espera un minuto y vuelve a intentarlo.", server: "El servidor tuvo un problema. Inténtalo de nuevo.", offline: "No hay conexión con el servidor. Revisa tu internet e inténtalo de nuevo.",
+    v_denied: "El navegador bloqueó el micrófono. Permítelo en la barra de direcciones o escribe tu pedido.", v_nospeech: "No te escuché. Toca el micrófono y habla de nuevo.",
+    v_nomic: "No encontré un micrófono. Puedes escribir tu pedido.", v_network: "El dictado necesita internet. Mientras tanto, escribe tu pedido.", v_generic: "El dictado falló. Inténtalo de nuevo o escribe tu pedido.",
+    v_unsupported: "Este navegador no tiene dictado por voz. Usa Chrome, Edge o Safari, o escribe tu pedido.",
+    mode_demo: "modo demo", mode_sandbox: "PayPal Sandbox", mode_live: "PayPal Live",
+    demo_note: "Modo demo: las facturas se simulan en memoria. Usa “Simular pago” para ver el aviso de pago recibido.",
+    ai_off: "El servidor aún no tiene configurada la clave de IA, así que el asistente no podrá responder.",
+    footer: "Demo con PayPal Sandbox: no se mueve dinero real. No ingreses datos reales de clientes. Hecho por Innov4AI SAC, Lima.",
+    status: { DRAFT: "Borrador", SENT: "Enviada", UNPAID: "Pendiente", PARTIALLY_PAID: "Pago parcial", PAYMENT_PENDING: "Pago en proceso", SCHEDULED: "Programada", PAID: "Pagada", MARKED_AS_PAID: "Pagada (registrada)", CANCELLED: "Cancelada", REFUNDED: "Reembolsada", PARTIALLY_REFUNDED: "Reembolso parcial", MARKED_AS_REFUNDED: "Reembolsada" },
+    actions: { draft_invoice: "Borrador creado", send_invoice: "Factura enviada", list_invoices: "Facturas consultadas", get_invoice: "Estado consultado", remind_invoice: "Recordatorio enviado", cancel_invoice: "Factura cancelada", record_payment: "Pago registrado", show_qr: "QR en pantalla" },
+  },
+  en: {
+    tagline: "Your voice cashier: bill customers with PayPal invoices, check who owes you and record payments, just by talking.",
+    placeholder: "Type or tap the microphone…", send: "Send", lang: "Language", message: "Message",
+    mic_start: "Speak", mic_stop: "Stop listening", mute: "Mute voice", unmute: "Unmute voice",
+    st_idle: "Tap the microphone and talk", st_listening: "Listening…", st_thinking: "Thinking…", st_speaking: "Speaking… (tap to interrupt)",
+    hint: "Say the customer's name, email and what you sold. I'll ask you to confirm before sending.",
+    thinking: "Thinking…",
+    greet: "Hi, I'm Destiny Pay. Tell me who to bill, their email and what you sold.",
+    examples: ["Bill John Smith for 3 boxes of tea at 12 dollars, email john at example dot com", "Yes, send it", "Who owes me?", "Show me John's QR code", "John paid me 10 dollars in cash", "Did John pay?"],
+    invoices: "Invoices in this session", th_client: "Customer", th_total: "Total", th_status: "Status", th_actions: "",
+    empty: "No invoices yet. Ask for your first charge.", pay: "Payment link", show_qr: "QR", simulate: "Simulate payment",
+    qr_title: "Scan to pay with PayPal", qr_demo: "Demo mode has no real QR. With PayPal Sandbox, the invoice's payment QR appears here.", close: "Close",
+    paid: (n, t) => `${n} just paid you ${t} with PayPal!`,
+    rate: "You're going too fast. Wait a minute and try again.", server: "The server had a problem. Please try again.", offline: "Can't reach the server. Check your connection and try again.",
+    v_denied: "The browser blocked the microphone. Allow it in the address bar, or type your request.", v_nospeech: "I didn't hear anything. Tap the microphone and speak again.",
+    v_nomic: "No microphone found. You can type your request.", v_network: "Dictation needs an internet connection. Type your request meanwhile.", v_generic: "Dictation failed. Try again or type your request.",
+    v_unsupported: "This browser has no voice dictation. Use Chrome, Edge or Safari, or type your request.",
+    mode_demo: "demo mode", mode_sandbox: "PayPal Sandbox", mode_live: "PayPal Live",
+    demo_note: "Demo mode: invoices are simulated in memory. Use “Simulate payment” to see the payment-received alert.",
+    ai_off: "The server has no AI key configured yet, so the assistant can't answer.",
+    footer: "Demo on PayPal Sandbox: no real money moves. Don't enter real customer data. Built by Innov4AI SAC, Lima, Peru.",
+    status: { DRAFT: "Draft", SENT: "Sent", UNPAID: "Unpaid", PARTIALLY_PAID: "Partially paid", PAYMENT_PENDING: "Payment pending", SCHEDULED: "Scheduled", PAID: "Paid", MARKED_AS_PAID: "Paid (recorded)", CANCELLED: "Cancelled", REFUNDED: "Refunded", PARTIALLY_REFUNDED: "Partially refunded", MARKED_AS_REFUNDED: "Refunded" },
+    actions: { draft_invoice: "Draft created", send_invoice: "Invoice sent", list_invoices: "Invoices checked", get_invoice: "Status checked", remind_invoice: "Reminder sent", cancel_invoice: "Invoice cancelled", record_payment: "Payment recorded", show_qr: "QR on screen" },
+  },
+  pt: {
+    tagline: "Sua caixa por voz: cobre clientes com faturas do PayPal, veja quem te deve e registre pagamentos, só falando.",
+    placeholder: "Digite ou toque no microfone…", send: "Enviar", lang: "Idioma", message: "Mensagem",
+    mic_start: "Falar", mic_stop: "Parar de ouvir", mute: "Silenciar voz", unmute: "Ativar voz",
+    st_idle: "Toque no microfone e fale", st_listening: "Estou ouvindo…", st_thinking: "Pensando…", st_speaking: "Falando… (toque para interromper)",
+    hint: "Diga o nome, o e-mail e o que você vendeu. Vou pedir confirmação antes de enviar.",
+    thinking: "Pensando…",
+    greet: "Oi, eu sou a Destiny Pay. Diga quem devo cobrar, o e-mail e o que você vendeu.",
+    examples: ["Cobre a Maria Souza 2 bolos a 15 dólares, e-mail maria arroba exemplo ponto com", "Sim, pode enviar", "Quem me deve?", "Mostre o QR da Maria", "A Maria me pagou 10 dólares em dinheiro", "A Maria já pagou?"],
+    invoices: "Faturas desta sessão", th_client: "Cliente", th_total: "Total", th_status: "Status", th_actions: "",
+    empty: "Ainda não há faturas. Peça sua primeira cobrança.", pay: "Link de pagamento", show_qr: "QR", simulate: "Simular pagamento",
+    qr_title: "Escaneie para pagar com PayPal", qr_demo: "No modo demo não há QR real. Com o PayPal Sandbox, o QR de pagamento da fatura aparece aqui.", close: "Fechar",
+    paid: (n, t) => `${n} acabou de te pagar ${t} com PayPal!`,
+    rate: "Você está indo rápido demais. Espere um minuto e tente de novo.", server: "O servidor teve um problema. Tente de novo.", offline: "Sem conexão com o servidor. Verifique sua internet e tente de novo.",
+    v_denied: "O navegador bloqueou o microfone. Permita na barra de endereço ou digite seu pedido.", v_nospeech: "Não ouvi nada. Toque no microfone e fale de novo.",
+    v_nomic: "Não encontrei um microfone. Você pode digitar seu pedido.", v_network: "O ditado precisa de internet. Enquanto isso, digite seu pedido.", v_generic: "O ditado falhou. Tente de novo ou digite seu pedido.",
+    v_unsupported: "Este navegador não tem ditado por voz. Use Chrome, Edge ou Safari, ou digite seu pedido.",
+    mode_demo: "modo demo", mode_sandbox: "PayPal Sandbox", mode_live: "PayPal Live",
+    demo_note: "Modo demo: as faturas são simuladas na memória. Use “Simular pagamento” para ver o aviso de pagamento recebido.",
+    ai_off: "O servidor ainda não tem a chave de IA configurada, então a assistente não poderá responder.",
+    footer: "Demo com PayPal Sandbox: nenhum dinheiro real é movimentado. Não insira dados reais de clientes. Feito pela Innov4AI SAC, Lima, Peru.",
+    status: { DRAFT: "Rascunho", SENT: "Enviada", UNPAID: "Pendente", PARTIALLY_PAID: "Pago parcial", PAYMENT_PENDING: "Pagamento em processamento", SCHEDULED: "Agendada", PAID: "Paga", MARKED_AS_PAID: "Paga (registrada)", CANCELLED: "Cancelada", REFUNDED: "Reembolsada", PARTIALLY_REFUNDED: "Reembolso parcial", MARKED_AS_REFUNDED: "Reembolsada" },
+    actions: { draft_invoice: "Rascunho criado", send_invoice: "Fatura enviada", list_invoices: "Faturas consultadas", get_invoice: "Status consultado", remind_invoice: "Lembrete enviado", cancel_invoice: "Fatura cancelada", record_payment: "Pagamento registrado", show_qr: "QR na tela" },
+  },
+};
+const SPEECH_LANG = { es: "es-PE", en: "en-US", pt: "pt-BR" };
+const PAID = new Set(["PAID", "MARKED_AS_PAID"]);
+const OPEN = new Set(["SENT", "UNPAID", "PARTIALLY_PAID", "PAYMENT_PENDING", "SCHEDULED"]);
+const BAD = new Set(["CANCELLED", "REFUNDED", "PARTIALLY_REFUNDED", "MARKED_AS_REFUNDED"]);
+
+const $ = id => document.getElementById(id);
+const log = $("log"), input = $("t"), mic = $("mic"), sendBtn = $("send");
+const store = {
+  get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* storage blocked: keep going */ } },
+};
+
+function uuid() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  const b = new Uint8Array(16);
+  if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(b); else for (let i = 0; i < 16; i++) b[i] = Math.random() * 256 | 0;
+  b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+  const h = Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+function initialLang() {
+  const saved = store.get("dp_lang");
+  if (saved && I18N[saved]) return saved;
+  for (const l of navigator.languages || [navigator.language || "en"]) {
+    const p = String(l).slice(0, 2).toLowerCase();
+    if (I18N[p]) return p;
+  }
+  return "en";
+}
+
+let lang = initialLang();
+let sid = store.get("dp_sid") || uuid();
+let muted = store.get("dp_muted") === "1";
+let demo = false, busy = false, state = "idle", serverStatus = null;
+let known = new Map(), rowsById = new Map();
+const t = k => I18N[lang][k];
+
+// ---------- UI text ----------
+function applyTexts() {
+  document.documentElement.lang = lang;
+  $("lang").value = lang;
+  $("lang-label").textContent = t("lang");
+  $("tagline").textContent = t("tagline");
+  input.placeholder = t("placeholder");
+  $("t-label").textContent = t("message");
+  sendBtn.textContent = t("send");
+  $("inv-title").textContent = t("invoices");
+  $("th-client").textContent = t("th_client"); $("th-total").textContent = t("th_total");
+  $("th-status").textContent = t("th_status"); $("th-actions").textContent = t("th_actions");
+  $("qr-title").textContent = t("qr_title");
+  $("qr-close").setAttribute("aria-label", t("close"));
+  $("footer").textContent = t("footer");
+  $("status-hint").textContent = SR ? t("hint") : t("v_unsupported");
+  if (!SR) mic.title = t("v_unsupported");
+  updateMute();
+  applyStatus();
+  const chips = $("chips"); chips.textContent = "";
+  for (const ex of t("examples")) {
+    const c = document.createElement("button");
+    c.type = "button"; c.className = "chip"; c.textContent = ex;
+    c.addEventListener("click", () => send(ex));
+    chips.appendChild(c);
+  }
+  setState(state);
+}
+
+function setState(s) {
+  state = s;
+  mic.dataset.state = s;
+  $("status").textContent = t("st_" + s);
+  mic.setAttribute("aria-label", s === "listening" ? t("mic_stop") : t("mic_start"));
+  mic.setAttribute("aria-pressed", s === "listening" ? "true" : "false");
+  sendBtn.disabled = busy;
+}
 
 function add(cls, text) {
-  const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
-  log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
+  const d = document.createElement("div");
+  d.className = "msg " + cls; d.textContent = text;
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+  return d;
 }
+
+function addAction(a) {
+  const d = document.createElement("div");
+  const label = t("actions")[a.tool] || a.tool;
+  d.className = "act" + (a.error ? " err" : "");
+  d.textContent = a.error ? `⚠ ${label}: ${a.error}` : `✓ ${label}`;
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+
+function applyStatus() {
+  if (!serverStatus) return;
+  demo = !!serverStatus.demo_mode;
+  $("mode").textContent = demo ? t("mode_demo") : (serverStatus.paypal_env === "live" ? t("mode_live") : t("mode_sandbox"));
+  notice(!serverStatus.ai_ready ? t("ai_off") : demo ? t("demo_note") : "");
+}
+
+function notice(text) {
+  $("notice").hidden = !text;
+  $("notice-text").textContent = text || "";
+}
+
+// ---------- speech output ----------
+let voices = [], speakTimer = null;
+function loadVoices() { try { voices = speechSynthesis.getVoices() || []; } catch (e) { voices = []; } }
+if ("speechSynthesis" in window) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+
+function pickVoice() {
+  const exact = SPEECH_LANG[lang].toLowerCase();
+  const norm = v => String(v.lang || "").toLowerCase().replace("_", "-");
+  return voices.find(v => norm(v) === exact) || voices.find(v => norm(v).startsWith(lang)) || null;
+}
+
 function speak(text) {
-  if (!('speechSynthesis' in window)) return;
-  const u = new SpeechSynthesisUtterance(text); u.lang = 'es-419'; speechSynthesis.cancel(); speechSynthesis.speak(u);
+  if (muted || !text || !("speechSynthesis" in window)) { setState("idle"); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  const v = pickVoice();
+  if (v) u.voice = v;
+  u.lang = v ? v.lang : SPEECH_LANG[lang];
+  const done = () => { clearTimeout(speakTimer); if (state === "speaking") setState("idle"); };
+  u.onend = done; u.onerror = done;
+  setState("speaking");
+  setTimeout(() => speechSynthesis.speak(u), 60);  // Chrome can drop an utterance queued right after cancel()
+  clearTimeout(speakTimer);
+  speakTimer = setTimeout(done, 5000 + text.length * 90);  // some browsers never fire onend
 }
-async function refresh() {
-  const r = await fetch('/api/invoices'); if (!r.ok) return;
-  const rows = await r.json();
-  document.getElementById('inv').innerHTML = rows.slice().reverse().map(i =>
-    `<tr><td>${esc(i.recipient || '')}</td><td>${esc(i.total || '')}</td><td class="st ${esc(i.status || '')}">${esc(i.status || '')}</td>` +
-    `<td>${i.payer_link ? `<a href="${encodeURI(i.payer_link)}" target="_blank" rel="noopener">pagar</a>` : ''}</td></tr>`).join('');
-}
-function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-async function send(text) {
-  if (!text.trim()) return;
-  add('me', text); input.value = '';
-  const wait = add('bot', '…');
-  try {
-    const r = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: sid, message: text})});
-    const data = await r.json();
-    wait.remove();
-    for (const a of data.actions || []) add('action', a.error ? `⚠️ ${a.tool}: ${a.error}` : `✔ ${a.tool}`);
-    add('bot', data.reply); speak(data.reply); refresh();
-  } catch (e) { wait.textContent = 'Error de conexión.'; }
+function stopSpeaking() {
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  clearTimeout(speakTimer);
+  if (state === "speaking") setState("idle");
 }
-document.getElementById('f').addEventListener('submit', e => { e.preventDefault(); send(input.value); });
 
+function updateMute() {
+  const b = $("mute");
+  b.textContent = muted ? "🔇" : "🔊";
+  b.setAttribute("aria-pressed", muted ? "true" : "false");
+  b.setAttribute("aria-label", muted ? t("unmute") : t("mute"));
+  b.title = b.getAttribute("aria-label");
+}
+
+// ---------- speech input ----------
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-if (SR) {
-  const rec = new SR(); rec.lang = 'es-PE'; rec.interimResults = false;
-  rec.onresult = e => send(e.results[0][0].transcript);
-  rec.onend = () => mic.classList.remove('on');
-  mic.onclick = () => { if (mic.classList.contains('on')) { rec.stop(); } else { mic.classList.add('on'); rec.start(); } };
-} else { mic.title = 'Tu navegador no soporta dictado; escribe el pedido.'; mic.disabled = true; }
+let rec = null, finalText = "", recError = null;
 
-fetch('/api/status').then(r => r.json()).then(s => { document.getElementById('mode').textContent = s.demo_mode ? 'modo demo' : 'PayPal ' + s.paypal_env; });
-refresh();
-add('bot', 'Hola, soy Destiny Pay. Dime a quién le cobro y qué le vendiste.');
+function startListening() {
+  if (!SR || busy) return;
+  stopSpeaking();  // barge-in: never listen while the assistant is talking (no echo)
+  finalText = ""; recError = null; input.value = "";
+  rec = new SR();
+  rec.lang = SPEECH_LANG[lang];
+  rec.interimResults = true;
+  rec.continuous = false;
+  rec.maxAlternatives = 1;
+  rec.onresult = e => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) finalText += r[0].transcript; else interim += r[0].transcript;
+    }
+    input.value = (finalText + " " + interim).trim();
+  };
+  rec.onerror = e => { recError = e.error; };
+  rec.onend = () => {
+    rec = null;
+    const text = (finalText || input.value).trim();
+    if (text) { send(text); return; }
+    setState("idle");
+    const key = { "not-allowed": "v_denied", "service-not-allowed": "v_denied", "no-speech": "v_nospeech", "audio-capture": "v_nomic", "network": "v_network" }[recError];
+    if (recError && recError !== "aborted") add("bot", t(key || "v_generic"));
+    recError = null;
+  };
+  try { rec.start(); setState("listening"); } catch (e) { rec = null; setState("idle"); add("bot", t("v_generic")); }
+}
+
+function stopListening() { if (rec) { try { rec.stop(); } catch (e) { /* already stopped */ } } }
+
+mic.addEventListener("click", () => {
+  if (state === "listening") stopListening();
+  else if (state === "speaking") stopSpeaking();
+  else startListening();
+});
+if (!SR) mic.disabled = true;
+
+// ---------- chat ----------
+async function send(text) {
+  text = String(text || "").trim();
+  if (!text || busy) return;
+  stopSpeaking();
+  busy = true; input.value = "";
+  add("me", text);
+  const wait = add("bot pending", t("thinking"));
+  setState("thinking");
+  let data;
+  try {
+    const r = await fetch("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sid, message: text, lang }),
+    });
+    if (r.status === 429) data = { reply: t("rate"), error: "rate" };
+    else if (!r.ok) data = { reply: t("server"), error: "server" };
+    else data = await r.json();
+  } catch (e) {
+    data = { reply: t("offline"), error: "offline" };
+  }
+  wait.remove();
+  for (const a of data.actions || []) addAction(a);
+  for (const u of data.ui || []) if (u && u.qr_png_base64) showQR(u);
+  const reply = data.reply || t("server");
+  add("bot", reply);
+  if (data.error && !(data.actions || []).length) input.value = text;  // nothing happened: let the owner resend it
+  busy = false;
+  speak(reply);
+  refresh();
+}
+
+$("f").addEventListener("submit", e => { e.preventDefault(); send(input.value); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { stopListening(); stopSpeaking(); } });
+
+// ---------- invoices ----------
+function pillClass(s) { return PAID.has(s) ? "ok" : OPEN.has(s) ? "warn" : BAD.has(s) ? "bad" : ""; }
+
+function render(rows) {
+  const body = $("inv"); body.textContent = "";
+  rowsById = new Map(rows.map(r => [r.id, r]));
+  $("empty").textContent = rows.length ? "" : t("empty");
+  for (const i of rows.slice().reverse()) {
+    const tr = document.createElement("tr");
+    const c1 = document.createElement("td"); c1.textContent = i.recipient || "";
+    const c2 = document.createElement("td"); c2.className = "num"; c2.textContent = i.total || "";
+    const c3 = document.createElement("td");
+    const pill = document.createElement("span"); pill.className = "pill " + pillClass(i.status);
+    pill.textContent = t("status")[i.status] || i.status || ""; c3.appendChild(pill);
+    const c4 = document.createElement("td");
+    const box = document.createElement("div"); box.className = "row-actions";
+    if (i.payer_link && OPEN.has(i.status)) {
+      const a = document.createElement("a"); a.href = i.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = t("pay");
+      box.appendChild(a);
+    }
+    if (demo && OPEN.has(i.status)) {
+      const b = document.createElement("button"); b.type = "button"; b.textContent = t("simulate");
+      b.addEventListener("click", () => simulatePay(i.id, b));
+      box.appendChild(b);
+    }
+    c4.appendChild(box);
+    tr.append(c1, c2, c3, c4);
+    body.appendChild(tr);
+  }
+}
+
+async function refresh() {
+  let rows;
+  try {
+    const r = await fetch("/api/invoices?session_id=" + encodeURIComponent(sid));
+    if (!r.ok) return;
+    rows = await r.json();
+  } catch (e) { return; }
+  if (!Array.isArray(rows)) return;
+  render(rows);
+  for (const i of rows) {
+    const prev = known.get(i.id);
+    if (prev && prev !== "PAID" && i.status === "PAID") announcePaid(i);
+    known.set(i.id, i.status);
+  }
+}
+
+function announcePaid(i) {
+  const text = t("paid")(i.recipient || i.email || "", i.total || "");
+  add("bot paid", text);
+  if (!busy && state !== "listening") speak(text);
+}
+
+async function simulatePay(id, btn) {
+  btn.disabled = true;
+  try { await fetch(`/api/demo/pay/${encodeURIComponent(id)}?session_id=${encodeURIComponent(sid)}`, { method: "POST" }); } catch (e) { /* refresh shows the state */ }
+  refresh();
+}
+
+function showQR(u) {
+  const body = $("qr-body"); body.textContent = "";
+  const img = new Image();
+  img.alt = t("qr_title");
+  img.onload = () => {
+    if (img.naturalWidth < 20) {  // demo mode returns a placeholder pixel
+      const p = document.createElement("div"); p.className = "demo-qr"; p.textContent = t("qr_demo");
+      body.textContent = ""; body.appendChild(p);
+    }
+  };
+  img.src = "data:image/png;base64," + u.qr_png_base64;
+  body.appendChild(img);
+  const linkBox = $("qr-link"); linkBox.textContent = "";
+  const row = rowsById.get(u.invoice_id);
+  if (row && row.payer_link) {
+    const a = document.createElement("a"); a.href = row.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = t("pay");
+    linkBox.appendChild(a);
+  }
+  $("qr").hidden = false;
+  $("qr").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+$("qr-close").addEventListener("click", () => { $("qr").hidden = true; });
+
+setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 8000);
+
+// ---------- language & sound ----------
+function newSession() {
+  sid = uuid(); store.set("dp_sid", sid);
+  known = new Map(); rowsById = new Map();
+  log.textContent = ""; $("qr").hidden = true; render([]);
+}
+
+$("lang").addEventListener("change", e => {
+  stopListening(); stopSpeaking();
+  lang = I18N[e.target.value] ? e.target.value : "en";
+  store.set("dp_lang", lang);
+  newSession();  // the assistant's language is fixed per conversation
+  applyTexts();
+  add("bot", t("greet"));
+});
+
+$("mute").addEventListener("click", () => {
+  muted = !muted; store.set("dp_muted", muted ? "1" : "0");
+  if (muted) stopSpeaking();
+  updateMute();
+});
+
+// ---------- start ----------
+store.set("dp_sid", sid); store.set("dp_lang", lang);
+applyTexts();
+add("bot", t("greet"));
+fetch("/api/status").then(r => r.json()).then(s => {
+  serverStatus = s;
+  applyStatus();
+  refresh();
+}).catch(() => refresh());
 </script>
 </body>
 </html>

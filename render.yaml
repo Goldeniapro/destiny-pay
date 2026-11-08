@@ -1,0 +1,26 @@
+# Render Blueprint: New > Blueprint > pick this repo. Secrets are typed in the Render dashboard, never committed.
+services:
+  - type: web
+    name: destiny-pay
+    runtime: python
+    plan: starter            # free also works, but it sleeps when idle and the first visit takes ~1 minute
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_ENV
+        value: sandbox
+      - key: DP_CURRENCY
+        value: USD
+      - key: DP_EFFORT
+        value: low
+      - key: DP_DAILY_TOKEN_BUDGET
+        value: "3000000"
