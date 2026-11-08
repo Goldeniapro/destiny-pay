@@ -252,3 +252,12 @@ def test_memory_snapshot_survives_reset_and_note(setup):
     assert conv.messages == [] and conv.awaiting == ""  # the reset clears the pending voice confirmation
     agent.chat(biz.ws, "conv-m", "hola", "es")
     assert "<business_memory>" in client.requests[-1]["messages"][0]["content"][0]["text"]
+
+
+def test_unsure_recognizer_yes_is_not_enough(setup):
+    biz, make = setup
+    agent, client = make([tool("draft_invoice", DRAFT), lambda kw: tool("request_send_invoice", {"invoice_id": last_invoice(biz)["id"]}, "t2"),
+                          text("¿Confirmas?"), text("¿Lo envío entonces?")])
+    agent.chat(biz.ws, "conv-alt", "Cóbrale a Sarah", "es")
+    agent.chat(biz.ws, "conv-alt", "sí", "es", alternatives=["sí", "si no"])
+    assert last_invoice(biz)["status"] == "DRAFT"

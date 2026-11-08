@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import itertools
 import threading
+import uuid
 
 from .paypal import PAID_STATUSES, UNPAID_STATUSES, PayPalError
 
@@ -110,7 +111,7 @@ class FakePayPal:
         inv["due_amount"]["value"] = f"{due:.2f}"
         inv["status"] = "MARKED_AS_PAID" if due < 0.005 else "PARTIALLY_PAID"
         self._save(inv)
-        return {"payment_id": f"DEMO-PAY-{invoice_id}"}
+        return {"payment_id": f"DEMO-PAY-{uuid.uuid4().hex[:10]}"}
 
     def qr_code(self, invoice_id, size=300):
         if self._get(invoice_id)["status"] == "DRAFT":

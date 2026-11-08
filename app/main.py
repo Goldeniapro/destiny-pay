@@ -75,7 +75,8 @@ def scheduler_tick() -> None:
                 store.x("UPDATE bills SET alerted=1 WHERE id=?", (b["id"],))
         except Exception:
             log.exception("refresh failed for a workspace")
-    for r in store.q("SELECT DISTINCT ws FROM payouts WHERE status NOT IN ('done','failed','unclaimed') AND checked_at<?", (now - 30,)):
+    for r in store.q("SELECT DISTINCT ws FROM payouts WHERE (status NOT IN ('done','failed','unclaimed') AND checked_at<?) "
+                     "OR (status='unclaimed' AND checked_at<?)", (now - 30, now - 1800)):
         try:
             business_factory(r["ws"]).check_payouts()
         except Exception:
@@ -225,7 +226,7 @@ def state(request: Request, ws: str = Query(**WS_ID), lang: str = "es", since: i
     lang = lang_of(lang)
     alerts = []
     for a in store.alerts_since(ws, max(since, 0)):
-        params = {k: (i18n.fmt_money(v[0], v[1], lang) if isinstance(v, list) and len(v) == 2 else v) for k, v in a["params"].items()}
+        params = money_params(a["params"], lang)
         try:
             text = i18n.t(a["key"], lang, **params)
         except (KeyError, IndexError):
@@ -239,12 +240,26 @@ def state(request: Request, ws: str = Query(**WS_ID), lang: str = "es", since: i
         "bills": [b for b in biz.list_bills("all") if b["status"] == "pending"] + [b for b in biz.list_bills("paid")][-10:],
         "reminders": biz.list_reminders(),
         "contacts": biz.find_contacts("", limit=100),
-        "activity": store.q("SELECT id, at, kind, text FROM activity WHERE ws=? ORDER BY id DESC LIMIT 40", (ws,)),
+        "activity": [render_activity(a, lang) for a in store.q("SELECT id, at, kind, text, data FROM activity WHERE ws=? ORDER BY id DESC LIMIT 40", (ws,))],
         "confirmations": biz.pending_confirmations(),
         "facts": biz.facts(20),
         "alerts": alerts,
         "last_alert_id": store.last_alert_id(ws),
     }
+
+
+def money_params(params: dict, lang: str) -> dict:
+    return {k: (i18n.fmt_money(v[0], v[1], lang) if isinstance(v, list) and len(v) == 2 else v) for k, v in params.items()}
+
+
+def render_activity(row: dict, lang: str) -> dict:
+    import json as _json
+    try:
+        data = _json.loads(row.get("data") or "{}")
+    except ValueError:
+        data = {}
+    text = i18n.log_text(data.get("_k", ""), lang, money_params(data.get("_p", {}), lang), row["text"]) if data.get("_k") else row["text"]
+    return {"id": row["id"], "at": row["at"], "kind": row["kind"], "text": text}
 
 
 @app.get("/api/briefing")

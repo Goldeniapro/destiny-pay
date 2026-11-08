@@ -52,4 +52,4 @@ def seed_demo(biz: Business, lang: str) -> None:
     biz.create_reminder(tx["call"], tomorrow_10.strftime("%Y-%m-%dT%H:%M"))
     for fact in tx["facts"]:
         biz.remember(fact)
-    biz.log("demo", "Sample business loaded")
+    biz.log("demo", "Sample business loaded", "demo", {})

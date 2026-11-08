@@ -145,3 +145,13 @@ def test_scheduler_tick_fires_reminders_and_refreshes(api):
     assert "a_reminder" in keys and "a_bill_due" in keys
     main.scheduler_tick()
     assert len(main.store.alerts_since(ws, 0)) == len(keys)  # nothing fires twice
+
+
+def test_activity_log_follows_language(api):
+    client, _ = api
+    ws = new_ws(client, "es")
+    es = client.get("/api/state", params={"ws": ws, "lang": "es"}).json()["activity"]
+    en = client.get("/api/state", params={"ws": ws, "lang": "en"}).json()["activity"]
+    zh = client.get("/api/state", params={"ws": ws, "lang": "zh"}).json()["activity"]
+    assert es[0]["text"] == "Negocio de ejemplo cargado" and en[0]["text"] == "Sample business loaded" and zh[0]["text"] == "示例商家已加载"
+    assert any(a["text"].startswith("Cuenta por pagar: Textiles Andinos SAC 180,00 USD") for a in es)

@@ -98,6 +98,40 @@ _DAYS = {"es": ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"], "en": ["Mon"
          "pt": ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"], "zh": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
          "fr": ["lun", "mar", "mer", "jeu", "ven", "sam", "dim"]}
 
+# --- activity log, shown in the owner's language ------------------------------------
+LOG = {
+    "invoice_draft": {"es": 'Borrador de factura para {name}: {amount}', "en": 'Draft invoice for {name}: {amount}', "pt": 'Rascunho de fatura para {name}: {amount}', "zh": '为 {name} 创建账单草稿：{amount}', "fr": 'Brouillon de facture pour {name} : {amount}'},
+    "invoice_paid": {"es": '{name} pagó {amount} en línea', "en": '{name} paid {amount} online', "pt": '{name} pagou {amount} online', "zh": '{name} 在线支付了 {amount}', "fr": '{name} a payé {amount} en ligne'},
+    "invoice_sent": {"es": 'Factura enviada a {name} ({email})', "en": 'Invoice sent to {name} ({email})', "pt": 'Fatura enviada a {name} ({email})', "zh": '账单已发送给 {name}（{email}）', "fr": 'Facture envoyée à {name} ({email})'},
+    "invoice_cancelled": {"es": 'Factura de {name} cancelada', "en": 'Invoice for {name} cancelled', "pt": 'Fatura de {name} cancelada', "zh": '{name} 的账单已取消', "fr": 'Facture de {name} annulée'},
+    "invoice_reminded": {"es": 'Recordatorio de pago enviado a {name}', "en": 'Payment reminder sent to {name}', "pt": 'Lembrete de pagamento enviado a {name}', "zh": '已向 {name} 发送付款提醒', "fr": 'Rappel de paiement envoyé à {name}'},
+    "payment_recorded": {"es": '{name} pagó {amount} ({method})', "en": '{name} paid {amount} ({method})', "pt": '{name} pagou {amount} ({method})', "zh": '{name} 支付了 {amount}（{method}）', "fr": '{name} a payé {amount} ({method})'},
+    "bill_added": {"es": 'Cuenta por pagar: {payee} {amount} el {date}', "en": 'Bill to pay: {payee} {amount} on {date}', "pt": 'Conta a pagar: {payee} {amount} em {date}', "zh": '应付账单：{payee} {amount}，{date} 到期', "fr": 'Facture à payer : {payee} {amount} le {date}'},
+    "bill_paid": {"es": 'Pagado a {payee}: {amount} ({method})', "en": 'Paid {payee} {amount} ({method})', "pt": 'Pago a {payee}: {amount} ({method})', "zh": '已付给 {payee} {amount}（{method}）', "fr": 'Payé à {payee} : {amount} ({method})'},
+    "bill_paid_paypal": {"es": 'Pagado a {payee} con PayPal: {amount}', "en": 'Paid {payee} {amount} with PayPal', "pt": 'Pago a {payee} com PayPal: {amount}', "zh": '已用 PayPal 付给 {payee} {amount}', "fr": 'Payé à {payee} avec PayPal : {amount}'},
+    "payout_sent": {"es": 'Pago de PayPal enviado a {payee}: {amount}', "en": 'PayPal payment sent to {payee}: {amount}', "pt": 'Pagamento PayPal enviado a {payee}: {amount}', "zh": '已向 {payee} 发出 PayPal 付款：{amount}', "fr": 'Paiement PayPal envoyé à {payee} : {amount}'},
+    "payout_failed": {"es": 'El pago de PayPal a {payee} falló; la cuenta vuelve a estar pendiente', "en": 'PayPal payment to {payee} failed; the bill is pending again', "pt": 'O pagamento PayPal a {payee} falhou; a conta voltou a pendente', "zh": '给 {payee} 的 PayPal 付款失败，账单恢复为待付', "fr": 'Le paiement PayPal à {payee} a échoué ; la facture est de nouveau à payer'},
+    "payout_unknown": {"es": 'Pago a {payee} aún sin confirmar por PayPal', "en": 'Payment to {payee} not confirmed by PayPal yet', "pt": 'Pagamento a {payee} ainda não confirmado pelo PayPal', "zh": '给 {payee} 的付款尚未获 PayPal 确认', "fr": 'Paiement à {payee} pas encore confirmé par PayPal'},
+    "income": {"es": 'Ingreso: {desc} {amount}', "en": 'Income: {desc} {amount}', "pt": 'Receita: {desc} {amount}', "zh": '收入：{desc} {amount}', "fr": 'Recette : {desc} {amount}'},
+    "expense": {"es": 'Gasto: {desc} {amount}', "en": 'Expense: {desc} {amount}', "pt": 'Despesa: {desc} {amount}', "zh": '支出：{desc} {amount}', "fr": 'Dépense : {desc} {amount}'},
+    "reminder_added": {"es": 'Recordatorio para {when}: {text}', "en": 'Reminder for {when}: {text}', "pt": 'Lembrete para {when}: {text}', "zh": '提醒（{when}）：{text}', "fr": 'Rappel pour {when} : {text}'},
+    "reminder_cancelled": {"es": 'Recordatorio cancelado: {text}', "en": 'Reminder cancelled: {text}', "pt": 'Lembrete cancelado: {text}', "zh": '提醒已取消：{text}', "fr": 'Rappel annulé : {text}'},
+    "fact": {"es": 'Recordaré: {fact}', "en": 'Remembered: {fact}', "pt": 'Vou lembrar: {fact}', "zh": '已记住：{fact}', "fr": 'Mémorisé : {fact}'},
+    "demo": {"es": 'Negocio de ejemplo cargado', "en": 'Sample business loaded', "pt": 'Negócio de exemplo carregado', "zh": '示例商家已加载', "fr": "Commerce d'exemple chargé"},
+    "confirmation_denied": {"es": 'El dueño rechazó una acción', "en": 'The owner declined an action', "pt": 'O dono recusou uma ação', "zh": '店主拒绝了一个操作', "fr": 'Le propriétaire a refusé une action'},
+    "confirmation_failed": {"es": 'Una acción confirmada falló: {error}', "en": 'A confirmed action failed: {error}', "pt": 'Uma ação confirmada falhou: {error}', "zh": '一个已确认的操作失败：{error}', "fr": 'Une action confirmée a échoué : {error}'},
+}
+
+
+def log_text(key: str, lang: str, params: dict, fallback: str) -> str:
+    tpl = LOG.get(key)
+    if not tpl:
+        return fallback
+    try:
+        return (tpl.get(lang) or tpl["en"]).format(**params)
+    except (KeyError, IndexError):
+        return fallback
+
 
 def t(key: str, lang: str, **params) -> str:
     text = T[key].get(lang) or T[key]["en"]

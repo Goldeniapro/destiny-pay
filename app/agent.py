@@ -285,6 +285,8 @@ class DestinyPayAgent:
             if asked:
                 target = next((p for p in biz.pending_confirmations() if p["id"] == asked), None)
                 verdict = classify_reply(user_text, target["kind"]) if target else "other"
+                if verdict == "yes" and any(classify_reply(a, target["kind"]) != "yes" for a in (alternatives or []) if a.strip()):
+                    verdict = "other"  # the recognizer wasn't sure it heard a yes: let the agent ask again
                 if verdict in ("yes", "no"):
                     done, reply, result = biz.resolve_confirmation(asked, verdict == "yes", lang)
                     self._note(conv, biz, user_text, reply)

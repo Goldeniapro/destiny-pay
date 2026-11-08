@@ -192,10 +192,13 @@ def test_payout_timeout_blocks_paying_twice(biz, monkeypatch):
     assert biz.store.alerts_since(biz.ws, 0)[-1]["key"] == "a_payout_unknown"
 
     def already(sender_batch_id, email, amount, **k):
-        raise PayPalError("PayPal 400: SENDER_BATCH_ID_ALREADY_USED")
+        raise PayPalError('PayPal 400: {"name":"USER_BUSINESS_ERROR","details":[{"issue":"SENDER_BATCH_ID_ALREADY_USED"}],'
+                          '"links":[{"href":"https://api-m.sandbox.paypal.com/v1/payments/payouts/BATCH77","rel":"self"}]}')
 
     monkeypatch.setattr(biz.paypal, "create_payout", already)
-    biz.check_payouts()  # PayPal confirms the first attempt existed
+    monkeypatch.setattr(biz.paypal, "get_payout", lambda bid: {"batch_header": {"payout_batch_id": bid, "batch_status": "SUCCESS"},
+                                                               "items": [{"transaction_status": "SUCCESS"}]} if bid == "BATCH77" else {})
+    biz.check_payouts()  # PayPal links the first attempt: its real status decides
     assert biz.bill_view(bill["id"])["status"] == "paid" and len(paid) == 1
     assert biz.overview()["expense"] == 50
 
@@ -210,7 +213,7 @@ def test_pending_payout_settles_or_rolls_back_from_paypal_status(biz, monkeypatc
     assert done and "Te aviso cuando PayPal lo confirme" in reply and result["status"] == "processing"
     assert biz.overview()["expense"] == 0  # not counted until PayPal confirms
     biz.pay_bill_with_paypal(yarn["id"])
-    statuses = {f"B-dp{biz.ws[:10]}b{rent['id']}": "SUCCESS", f"B-dp{biz.ws[:10]}b{yarn['id']}": "RETURNED"}
+    statuses = {f"B-dp{biz.ws[:10]}b{rent['id']}a1": "SUCCESS", f"B-dp{biz.ws[:10]}b{yarn['id']}a1": "RETURNED"}
     monkeypatch.setattr(biz.paypal, "get_payout", lambda bid: {"batch_header": {"payout_batch_id": bid, "batch_status": "SUCCESS"},
                                                                "items": [{"transaction_status": statuses[bid]}]})
     biz.check_payouts()
@@ -369,3 +372,94 @@ def test_demo_paypal_survives_restart(store):
     p2 = FakePayPal(store)  # a new process
     assert p2.get_invoice(inv["id"])["status"] == "DRAFT"
     assert p2.create_invoice("Ana", "ana@example.com", ITEMS)["id"] != inv["id"]
+
+
+def test_already_used_without_link_stays_in_progress(biz, monkeypatch):
+    bill = biz.add_bill("Proveedor", "x", 50, biz.today().isoformat(), "none", "p@example.com")
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda *a, **k: (_ for _ in ()).throw(PayPalError("Could not reach PayPal: ReadTimeout")))
+    with pytest.raises(ValidationError):
+        biz.pay_bill_with_paypal(bill["id"])
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda *a, **k: (_ for _ in ()).throw(PayPalError("PayPal 400: SENDER_BATCH_ID_ALREADY_USED")))
+    biz.check_payouts()
+    assert biz.bill_view(bill["id"])["status"] == "processing" and biz.overview()["expense"] == 0  # never assumed paid
+    with pytest.raises(ValidationError, match="in progress"):
+        biz.mark_bill_paid(bill["id"], "CASH")
+    biz.store.x("UPDATE payouts SET created_at=? WHERE bill_id=?", (time.time() - 3600, bill["id"]))
+    assert biz.mark_bill_paid(bill["id"], "PAYPAL")["status"] == "paid"  # the owner checked PayPal and saw it
+    assert biz.overview()["expense"] == 50
+
+
+def test_cash_cannot_settle_a_bill_with_payout_in_flight(biz, monkeypatch):
+    bill = biz.add_bill("Proveedor", "x", 50, biz.today().isoformat(), "none", "p@example.com")
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda sbid, *a, **k: {"batch_header": {"payout_batch_id": "B1", "batch_status": "PENDING"}})
+    stale = biz._bill(bill["id"])  # read while still pending
+    biz.pay_bill_with_paypal(bill["id"])
+    with pytest.raises(ValidationError, match="already paid"):
+        biz._settle_bill(stale, "CASH", "")  # what a racing mark_bill_paid would do
+    assert biz.bill_view(bill["id"])["status"] == "processing"
+
+
+def test_unclaimed_payout_returned_later_is_undone(biz, monkeypatch):
+    bill = biz.add_bill("Proveedor", "x", 100, biz.today().isoformat(), "none", "p@example.com")
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda sbid, *a, **k: {"batch_header": {"payout_batch_id": "BU", "batch_status": "PENDING"}})
+    state = {"s": "UNCLAIMED"}
+    monkeypatch.setattr(biz.paypal, "get_payout", lambda bid: {"batch_header": {"payout_batch_id": bid, "batch_status": "SUCCESS"},
+                                                               "items": [{"transaction_status": state["s"]}]})
+    biz.pay_bill_with_paypal(bill["id"])
+    biz.check_payouts()
+    assert biz.bill_view(bill["id"])["status"] == "paid" and biz.overview()["expense"] == 100
+    state["s"] = "RETURNED"
+    biz.store.x("UPDATE payouts SET checked_at=0")
+    biz.check_payouts()
+    assert biz.bill_view(bill["id"])["status"] == "pending" and biz.overview()["expense"] == 0
+    assert biz.store.alerts_since(biz.ws, 0)[-1]["key"] == "a_payout_failed"
+
+
+def test_failed_payout_can_be_retried(biz, monkeypatch):
+    bill = biz.add_bill("Proveedor", "x", 50, biz.today().isoformat(), "none", "p@example.com")
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda sbid, *a, **k: {"batch_header": {"payout_batch_id": "BF", "batch_status": "DENIED"}})
+    with pytest.raises(ValidationError, match="denied"):
+        biz.pay_bill_with_paypal(bill["id"])
+    assert biz.bill_view(bill["id"])["status"] == "pending"
+    monkeypatch.undo()
+    assert biz.pay_bill_with_paypal(bill["id"])["status"] == "paid"
+
+
+def test_unknown_payout_rejected_on_recheck_goes_back_to_pending(biz, monkeypatch):
+    bill = biz.add_bill("Proveedor", "x", 50, biz.today().isoformat(), "none", "p@example.com")
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda *a, **k: (_ for _ in ()).throw(ValueError("bad json")))
+    with pytest.raises(ValidationError):
+        biz.pay_bill_with_paypal(bill["id"])  # unexpected error: treated as unknown, never forgotten
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda *a, **k: (_ for _ in ()).throw(PayPalError("PayPal 422: INSUFFICIENT_FUNDS")))
+    biz.check_payouts()
+    assert biz.bill_view(bill["id"])["status"] == "pending"
+
+
+def test_stale_starting_payout_becomes_unknown(biz):
+    bill = biz.add_bill("Proveedor", "x", 50, biz.today().isoformat(), "none", "p@example.com")
+    biz.store.x("UPDATE bills SET status='processing' WHERE id=?", (bill["id"],))
+    biz.store.x("INSERT INTO payouts(sender_batch_id,ws,bill_id,status,amount,created_at) VALUES(?,?,?,?,?,?)",
+                ("dpX", biz.ws, bill["id"], "starting", 50, time.time() - 120))
+    biz.check_payouts()  # re-sends with the same id (FakePayPal accepts it once) and settles from PayPal's answer
+    assert biz.store.one("SELECT status FROM payouts WHERE sender_batch_id='dpX'")["status"] in ("done", "PENDING", "SUCCESS")
+    assert biz.bill_view(bill["id"])["status"] == "paid"
+
+
+def test_online_income_uses_ledger_not_stale_due(biz, monkeypatch):
+    inv = draft(biz, items=[{"name": "x", "quantity": 1, "unit_price": 100}])
+    biz.send_invoice(inv["id"])
+    real_get = biz.paypal.get_invoice
+    monkeypatch.setattr(biz.paypal, "get_invoice", lambda i: (_ for _ in ()).throw(PayPalError("PayPal 503")))
+    biz.record_payment(inv["id"], 40, "CASH")  # the refresh after it fails: local due stays stale
+    monkeypatch.setattr(biz.paypal, "get_invoice", real_get)
+    biz.paypal.mark_paid(inv["id"])
+    biz.refresh_invoice(inv["id"])
+    assert biz.overview()["income"] == 100
+
+
+def test_demo_partial_payments_all_counted(biz):
+    inv = draft(biz, items=[{"name": "x", "quantity": 1, "unit_price": 100}])
+    biz.send_invoice(inv["id"])
+    biz.record_payment(inv["id"], 40, "CASH")
+    biz.record_payment(inv["id"], 60, "YAPE")
+    assert biz.overview()["income"] == 100 and biz.invoice_view(inv["id"])["status"] == "MARKED_AS_PAID"
