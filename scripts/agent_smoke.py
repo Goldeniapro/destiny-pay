@@ -1,4 +1,4 @@
-"""Check the real Claude agent end to end in five languages, with an in-memory PayPal (no sandbox calls).
+"""Check the real Claude agent end to end in three languages, with an in-memory PayPal (no sandbox calls).
 
 Usage:  python scripts/agent_smoke.py
 Needs ANTHROPIC_API_KEY in .env. Costs a few cents. Prints each reply and the tools the agent used,
@@ -36,9 +36,8 @@ SCRIPTS = {
     "en": [("Bill Lucho Ramos for one alpaca scarf at 30 dollars", {"draft_invoice", "request_send_invoice"}, set()),
            ("Actually wait, what do I have to pay this week?", {"list_bills"}, set()),
            ("I sold a hat for 22 dollars in cash", {"record_movement"}, set())],
-    "pt": [("Quem me deve?", {"list_invoices"}, set()), ("Lembre que a Sarah sempre paga atrasado", {"remember"}, set())],
-    "zh": [("谁欠我钱？", {"list_invoices"}, set()), ("我这个月生意怎么样？", {"financial_overview"}, set())],
-    "fr": [("Qui me doit de l'argent ?", {"list_invoices"}, set()), ("Que dois-je payer en premier ?", {"list_bills", "financial_overview"}, set())],
+    "pt": [("Quem me deve?", {"list_invoices"}, set()), ("Lembre que a Sarah sempre paga atrasado", {"remember"}, set()),
+           ("O que eu pago primeiro?", {"list_bills", "financial_overview"}, set())],
 }
 
 

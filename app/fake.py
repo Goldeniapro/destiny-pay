@@ -84,9 +84,6 @@ class FakePayPal:
     def get_invoice(self, invoice_id):
         return self._get(invoice_id)
 
-    def list_invoices(self, page_size=50):
-        return list(self.invoices.values())[-page_size:]
-
     def remind_invoice(self, invoice_id, note=""):
         if self._get(invoice_id)["status"] in PAID_STATUSES | {"DRAFT", "CANCELLED"}:
             raise PayPalError("PayPal 422: CANNOT_REMIND_INVOICE")

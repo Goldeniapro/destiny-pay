@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from .business import Business
 
-NAMES = {"es": "Inti Artesanías", "en": "Inti Crafts", "pt": "Inti Artesanato", "fr": "Inti Artisanat", "zh": "Inti 手工艺"}
+NAMES = {"es": "Inti Artesanías", "en": "Inti Crafts", "pt": "Inti Artesanato"}
 
 TEXT = {
     "es": {"sarah": "Turista de Chicago; prefiere inglés.", "lucho": "Cliente local; paga con Yape.", "textiles": "Proveedor de hilo de alpaca.",
@@ -25,8 +25,7 @@ TEXT = {
            "sales": ["Alpaca sweater", "Woven scarf", "Ayacucho altarpiece", "Silver earrings", "Chullo hat", "Andean blanket"],
            "exp": [("Yarn and dyes", "supplies"), ("Taxi to the market", "transport"), ("October rent", "rent"), ("Social media ads", "marketing")]},
 }
-for _lang in ("pt", "fr", "zh"):
-    TEXT[_lang] = TEXT["en"]
+TEXT["pt"] = TEXT["en"]
 
 
 def seed_demo(biz: Business, lang: str) -> None:

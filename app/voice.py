@@ -1,4 +1,4 @@
-"""Destiny Pay's own voice (Fish Audio): one brand voice for every language, plus server speech-to-text.
+"""Destiny Pay's own voice (Fish Audio): one brand voice in all three languages, plus server speech-to-text.
 
 Only texts the server itself produced can be spoken (replies, alerts, briefings), so the endpoint
 can't be used as a free text-to-speech service. Both features are optional: without FISH_API_KEY
@@ -18,7 +18,7 @@ from typing import Iterator
 import httpx
 
 FISH_URL = "https://api.fish.audio"
-SPEECH_LANG = {"es": "es", "en": "en", "pt": "pt", "zh": "zh", "fr": "fr"}
+SPEECH_LANG = {"es": "es", "en": "en", "pt": "pt"}
 
 
 class VoiceError(RuntimeError):

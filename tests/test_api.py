@@ -36,7 +36,7 @@ def new_ws(client, lang="es", sample=True):
 def test_status_and_page(api):
     client, _ = api
     s = client.get("/api/status").json()
-    assert s["demo_mode"] and s["langs"] == ["es", "en", "pt", "zh", "fr"] and s["voice"] == {"tts": False, "stt": False}
+    assert s["demo_mode"] and s["langs"] == ["es", "en", "pt"] and s["voice"] == {"tts": False, "stt": False}
     assert "Destiny" in client.get("/").text
 
 
@@ -152,6 +152,6 @@ def test_activity_log_follows_language(api):
     ws = new_ws(client, "es")
     es = client.get("/api/state", params={"ws": ws, "lang": "es"}).json()["activity"]
     en = client.get("/api/state", params={"ws": ws, "lang": "en"}).json()["activity"]
-    zh = client.get("/api/state", params={"ws": ws, "lang": "zh"}).json()["activity"]
-    assert es[0]["text"] == "Negocio de ejemplo cargado" and en[0]["text"] == "Sample business loaded" and zh[0]["text"] == "示例商家已加载"
+    pt = client.get("/api/state", params={"ws": ws, "lang": "pt"}).json()["activity"]
+    assert es[0]["text"] == "Negocio de ejemplo cargado" and en[0]["text"] == "Sample business loaded" and pt[0]["text"] == "Negócio de exemplo carregado"
     assert any(a["text"].startswith("Cuenta por pagar: Textiles Andinos SAC 180,00 USD") for a in es)

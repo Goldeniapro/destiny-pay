@@ -142,9 +142,9 @@ def test_tool_errors_are_contained(setup):
 def test_api_failure_rolls_back_or_keeps_completed_work(setup):
     biz, make = setup
     agent, client = make([api_error(), text("Hola")])
-    res = agent.chat(biz.ws, "conv-6", "hola", "fr")
-    assert res["reply"] == T["api_error"]["fr"] and agent.conversations.peek("conv-6").messages == []
-    agent.chat(biz.ws, "conv-6", "hola", "fr")
+    res = agent.chat(biz.ws, "conv-6", "hola", "pt")
+    assert res["reply"] == T["api_error"]["pt"] and agent.conversations.peek("conv-6").messages == []
+    agent.chat(biz.ws, "conv-6", "hola", "pt")
     agent2, _ = make([tool("record_movement", {"kind": "income", "description": "Venta", "amount": 20, "method": "CASH", "category": "sales", "contact": ""}), api_error()])
     res = agent2.chat(biz.ws, "conv-7", "vendí 20 en efectivo", "es")
     assert res["reply"] == T["partial"]["es"] and biz.overview()["income"] == 20
@@ -165,9 +165,9 @@ def test_bad_request_resets_conversation_and_empty_answer_is_safe(setup):
 def test_alternatives_and_language_are_passed(setup):
     biz, make = setup
     agent, client = make([text("ok")])
-    agent.chat(biz.ws, "conv-9", "cóbrale a juan peres", "zh", alternatives=["cóbrale a Juan Pérez", "cóbrale a juan peres"])
+    agent.chat(biz.ws, "conv-9", "cóbrale a juan peres", "pt", alternatives=["cóbrale a Juan Pérez", "cóbrale a juan peres"])
     req = client.requests[0]
-    assert "Mandarin Chinese" in req["system"] and "Juan Pérez" in req["messages"][0]["content"][0]["text"]
+    assert "Portuguese" in req["system"] and "Juan Pérez" in req["messages"][0]["content"][0]["text"]
     assert req["model"] == "claude-opus-5-5" and req["fallbacks"] == "default" and req["cache_control"] == {"type": "ephemeral"}
 
 

@@ -15,9 +15,9 @@ def test_every_text_exists_in_every_language():
     ("no", "no"), ("mejor no", "no"), ("todavía no", "no"), ("no, espera", "no"),
     ("sí, pero cambia el monto", "other"), ("sí a 40 dólares", "other"), ("sí, mándala mañana", "other"), ("¿quién me debe?", "other"),
     ("yes send it", "yes"), ("go ahead", "yes"), ("wait", "no"), ("don't send it", "no"), ("yes but change the email", "other"),
-    ("sim, pode enviar", "yes"), ("ainda não", "no"), ("oui", "yes"), ("d'accord", "yes"), ("non", "no"), ("pas encore", "no"),
-    ("好的", "yes"), ("是的，发送", "yes"), ("不要", "no"), ("不是", "no"), ("改成五十", "other"),
-    ("cancel the payment please", "no"), ("cancel it", "no"), ("cancélala", "no"), ("取消吧", "no"), ("是不是", "no"),
+    ("sim, pode enviar", "yes"), ("ainda não", "no"), 
+    
+    ("cancel the payment please", "no"), ("cancel it", "no"), ("cancélala", "no"), 
     ("who is it for", "other"), ("is it sent", "other"), ("yes what is the total", "other"), ("do I owe it", "other"),
     ("ok send it to the other one", "other"), ("sí envíala al otro correo", "other"), ("¿sí?", "other"),
 ])
@@ -35,7 +35,7 @@ def test_cancel_words_confirm_only_a_cancellation():
 def test_money_format_per_language():
     from app.i18n import fmt_money
     assert fmt_money(1234.5, "USD", "es") == "1.234,50 USD" and fmt_money(1234.5, "USD", "en") == "1,234.50 USD"
-    assert fmt_money(1234.5, "USD", "fr") == "1 234,50 USD" and fmt_money(1234.5, "USD", "zh") == "1,234.50 USD"
+    assert fmt_money(1234.5, "USD", "pt") == "1.234,50 USD"
 
 
 def test_voice_disabled_without_keys():

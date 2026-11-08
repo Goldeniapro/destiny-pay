@@ -17,13 +17,11 @@ def draft(biz, name="Sarah Miller", email="sarah arroba example punto com", item
 
 
 # ---------------------------------------------------------------- memory of contacts
-def test_spoken_emails_in_five_languages():
+def test_spoken_emails_in_three_languages():
     assert normalize_email("juan arroba correo punto com") == "juan@correo.com"
     assert normalize_email("mateo arroba gmail punto com") == "mateo@gmail.com"
     assert normalize_email("catalina dot rojas at mail dot com") == "catalina.rojas@mail.com"
     assert normalize_email("maria arroba exemplo ponto com ponto br") == "maria@exemplo.com.br"
-    assert normalize_email("pierre arobase mail point fr") == "pierre@mail.fr"
-    assert normalize_email("wang 艾特 qq 点 com") == "wang@qq.com"
 
 
 def test_draft_saves_contact_and_reuses_email(biz):
@@ -347,7 +345,7 @@ def test_overview_cashflow_and_briefing(biz):
     assert len(flow) == 30 and sum(d["out"] for d in flow) == 300 and sum(d["in"] for d in flow) == 90
     text = biz.briefing("es")
     assert "90,00 USD" in text and "Marta" in text and "90.00 USD" in biz.briefing("en")
-    assert "Marta" in biz.briefing("zh")
+    assert "Marta" in biz.briefing("pt")
 
 
 def test_memory_snapshot_and_facts(biz):

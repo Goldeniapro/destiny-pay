@@ -36,10 +36,10 @@
   let status = null, state = "idle", busy = false, lastAlert = 0, lastState = null, currency = "USD";
   const shownCards = new Set();
   const t = k => I18N[lang][k];
-  const money = (v, cur) => `${Number(v || 0).toLocaleString(lang === "zh" ? "zh-CN" : lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur || currency}`;
-  const fmtDate = iso => { if (!iso) return ""; const d = new Date(iso.length <= 10 ? iso + "T12:00:00" : iso); return d.toLocaleDateString(lang === "zh" ? "zh-CN" : lang, { weekday: "short", day: "numeric", month: "short" }); };
-  const fmtShort = iso => { if (!iso) return ""; const d = new Date(iso + "T12:00:00"); return d.toLocaleDateString(lang === "zh" ? "zh-CN" : lang, { day: "numeric", month: "short" }); };
-  const fmtWhen = iso => { const d = new Date(iso); return d.toLocaleString(lang === "zh" ? "zh-CN" : lang, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
+  const money = (v, cur) => `${Number(v || 0).toLocaleString(lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur || currency}`;
+  const fmtDate = iso => { if (!iso) return ""; const d = new Date(iso.length <= 10 ? iso + "T12:00:00" : iso); return d.toLocaleDateString(lang, { weekday: "short", day: "numeric", month: "short" }); };
+  const fmtShort = iso => { if (!iso) return ""; const d = new Date(iso + "T12:00:00"); return d.toLocaleDateString(lang, { day: "numeric", month: "short" }); };
+  const fmtWhen = iso => { const d = new Date(iso); return d.toLocaleString(lang, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
 
   const withTimeout = (opts, ms) => {
     const o = Object.assign({}, opts || {});
@@ -507,7 +507,7 @@
     renderKpis(s.overview); renderChart(s.cashflow);
     if (window.agGrid) { setGrid("invoices", s.invoices); setGrid("bills", s.bills); setGrid("contacts", s.contacts); }
     renderList("reminders", s.reminders, t("empty_reminders"), r => li(fmtWhen(r.due_at), (r.kind === "remind_customer" ? "📧 " : "⏰ ") + r.text));
-    renderList("activity", s.activity, t("empty_activity"), a => li(new Date(a.at * 1000).toLocaleString(lang === "zh" ? "zh-CN" : lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }), a.text));
+    renderList("activity", s.activity, t("empty_activity"), a => li(new Date(a.at * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }), a.text));
     renderList("memory", s.facts, t("empty_memory"), f => li("", "🧠 " + f));
     for (const c of s.confirmations) addCard(cardFromState(c));
     const live = new Set(s.confirmations.map(c => c.id));

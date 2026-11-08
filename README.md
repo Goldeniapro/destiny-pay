@@ -1,6 +1,6 @@
 # Destiny Pay 🎙️
 
-**The voice-first money desk for small businesses.** Talk to it in Spanish, English, Portuguese, Mandarin or French: Destiny Pay bills your customers with PayPal invoices, pays your suppliers with PayPal Payouts, remembers every customer and every debt, reminds you before things are due, and tells you how your business is really doing. **Nothing moves without your confirmation, and that rule is enforced in code, not in a prompt.**
+**The voice-first money desk for small businesses.** Talk to it in Spanish, English or Portuguese: Destiny Pay bills your customers with PayPal invoices, pays your suppliers with PayPal Payouts, remembers every customer and every debt, reminds you before things are due, and tells you how your business is really doing. **Nothing moves without your confirmation, and that rule is enforced in code, not in a prompt.**
 
 > 🔗 **Live demo:** _coming soon_ · 🎬 **Video:** _coming soon_ · Built for the PayPal AI Hackathon 2026 by Innov4AI SAC (Lima, Peru)
 
@@ -31,7 +31,7 @@ Micro and small businesses are about 99% of all companies in Latin America ([CEP
 | "How am I doing?" | Income, expenses, overdue, 30-day cash projection, one or two concrete suggestions | Financial overview |
 
 ## Built so an AI can be trusted with money
-- **Human confirmation by code.** The model has no tool that sends, cancels or pays. It can only *request* those actions, which creates a confirmation card. The server executes the action only when the owner presses Confirm, or answers a clear "yes" to that exact request in their very next message. A "yes" meant for another question, or "yes, but change the amount", never triggers a payment. The classifier understands five languages and is tested case by case.
+- **Human confirmation by code.** The model has no tool that sends, cancels or pays. It can only *request* those actions, which creates a confirmation card. The server executes the action only when the owner presses Confirm, or answers a clear "yes" to that exact request in their very next message. A "yes" meant for another question, or "yes, but change the amount", never triggers a payment. The classifier only accepts a closed confirmation vocabulary in Spanish, English and Portuguese: questions, numbers, corrections, negations and "cancel" never confirm, and every speech-recognition alternative must agree. It is tested case by case.
 - **Never twice.** Confirmations are claimed atomically (a button click and a spoken yes can't both run). Payouts use a unique `sender_batch_id` per bill plus a database lock before any money moves; if PayPal times out, the bill stays "in progress" (it can't be paid another way) until PayPal's own status settles it. Payouts are also capped per payment and per day. Every PayPal POST carries an idempotency key reused across retries. If a reply fails after a tool already ran, the agent remembers what was done and never repeats it.
 - **Isolated.** Every business only sees and acts on its own invoices, bills, reminders and confirmations, even on one shared sandbox merchant.
 - **Untrusted text stays data.** Contact names, notes, remembered facts and PayPal responses are passed as data, never as instructions.
@@ -39,7 +39,7 @@ Micro and small businesses are about 99% of all companies in Latin America ([CEP
 - **Sandbox only.** Live PayPal is refused unless explicitly enabled.
 
 ## Voice that holds up at a busy counter
-- **One brand voice in five languages** (Fish Audio), streamed so speech starts in about half a second; the browser's own voice is the automatic fallback.
+- **One brand voice in all three languages** (Fish Audio), streamed so speech starts in about half a second; the browser's own voice is the automatic fallback.
 - **Dictation with alternatives**: the agent sees the recognizer's alternatives to pick the right name or number, and reads every item and total back before anything is sent.
 - **Fallback transcription** (server speech-to-text) when browser dictation fails or isn't available, with automatic end-of-speech detection.
 - Clear states (listening, thinking, speaking), tap to interrupt, no listening while speaking (no echo), queued alerts that never cut a reply, a mute button, and typing always works.
@@ -54,7 +54,7 @@ FastAPI ── rate limits · budgets · background scheduler · verified PayPal
    ├── Claude (claude-opus-5-5) tool loop: 20 strict tools, prompt caching, server-side fallback
    ├── Business layer: memory, confirmations, ledger, reminders, financial overview  ──►  SQLite
    ├── PayPal REST: Invoicing v2 · Payouts · Webhooks verification (sandbox)
-   └── Fish Audio: text-to-speech (one voice, 5 languages) · speech-to-text
+   └── Fish Audio: text-to-speech (one voice, 3 languages) · speech-to-text
 ```
 | File | What it holds |
 |---|---|
@@ -63,7 +63,7 @@ FastAPI ── rate limits · budgets · background scheduler · verified PayPal
 | `app/store.py` | SQLite schema and access |
 | `app/paypal.py` | PayPal client: OAuth, retries, idempotency, Invoicing, Payouts, webhook verification |
 | `app/voice.py` | Fish Audio voice and transcription, with caching and budgets |
-| `app/i18n.py` | Server texts in five languages and the yes/no classifier |
+| `app/i18n.py` | Server texts in three languages and the yes/no classifier |
 | `app/main.py` | API, scheduler, webhooks, limits |
 | `static/` | The dashboard (no build step; AG Grid Community vendored) |
 
@@ -82,7 +82,7 @@ Without PayPal credentials it runs in **demo mode** with a simulated PayPal (and
 Checks:
 ```bash
 pytest -q                                              # offline test suite, no keys needed
-python scripts/agent_smoke.py                          # real Claude in five languages, simulated PayPal
+python scripts/agent_smoke.py                          # real Claude in three languages, simulated PayPal
 python scripts/sandbox_smoke.py buyer@personal.example.com   # real PayPal sandbox: invoices, QR, payments, payout
 ```
 

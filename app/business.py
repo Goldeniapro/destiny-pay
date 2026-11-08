@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from . import i18n
-from .paypal import FINAL_STATUSES, PAID_STATUSES, PAYMENT_METHODS, UNPAID_STATUSES, PayPalError, summarize
+from .paypal import PAID_STATUSES, PAYMENT_METHODS, UNPAID_STATUSES, PayPalError, summarize
 from .store import Store
 
 MAX_INVOICES = 60
@@ -33,10 +33,10 @@ PAYOUT_UNCLAIMED = {"UNCLAIMED", "PENDING_CLAIM"}
 PAYOUT_BAD = {"FAILED", "RETURNED", "BLOCKED", "DENIED", "REFUNDED", "REVERSED", "CANCELED", "CANCELLED"}
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 _SPOKEN = [
-    (r"\s*\b(arroba|at|arobase)\b\s*", "@"), (r"\s*(艾特|圈a)\s*", "@"),
-    (r"\s*\b(punto|dot|ponto|point)\b\s*", "."), (r"\s*点\s*", "."),
-    (r"\s*\b(guion bajo|guión bajo|underscore|tiret bas)\b\s*", "_"), (r"\s*下划线\s*", "_"),
-    (r"\s*\b(guion|guión|dash|hífen|hifen|tiret)\b\s*", "-"),
+    (r"\s*\b(arroba|at)\b\s*", "@"),
+    (r"\s*\b(punto|dot|ponto)\b\s*", "."),
+    (r"\s*\b(guion bajo|guión bajo|underscore)\b\s*", "_"),
+    (r"\s*\b(guion|guión|dash|hífen|hifen)\b\s*", "-"),
 ]
 METHODS = {"CASH", "BANK_TRANSFER", "YAPE", "PLIN", "CARD", "PAYPAL", "OTHER"}
 
@@ -714,7 +714,7 @@ class Business:
     def briefing(self, lang: str) -> str:
         o = self.overview("month")
         hour = self.now().hour
-        parts = [i18n.t("b_morning" if hour < 12 else "b_afternoon" if hour < 19 else "b_evening", lang) + ("。" if lang == "zh" else ".")]
+        parts = [i18n.t("b_morning" if hour < 12 else "b_afternoon" if hour < 19 else "b_evening", lang) + "."]
         cur = self.currency
         if o["open_invoices"]:
             parts.append(i18n.t("b_receivable", lang, amount=i18n.fmt_money(o["receivable"], cur, lang), n=o["open_invoices"]))
@@ -736,7 +736,7 @@ class Business:
             parts.append(i18n.t("b_month", lang, income=i18n.fmt_money(o["income"], cur, lang), expense=i18n.fmt_money(o["expense"], cur, lang)))
         if len(parts) == 1:
             parts.append(i18n.t("b_clear", lang))
-        return ("" if lang == "zh" else " ").join(parts)
+        return " ".join(parts)
 
     def memory_snapshot(self) -> str:
         """Compact business memory given to the agent at the start of each conversation."""

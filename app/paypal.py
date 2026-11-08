@@ -16,7 +16,6 @@ LIVE_URL = "https://api-m.paypal.com"
 
 UNPAID_STATUSES = {"SENT", "UNPAID", "PARTIALLY_PAID", "PAYMENT_PENDING", "SCHEDULED"}
 PAID_STATUSES = {"PAID", "MARKED_AS_PAID"}
-FINAL_STATUSES = PAID_STATUSES | {"CANCELLED", "REFUNDED", "MARKED_AS_REFUNDED"}
 PAYMENT_METHODS = {"CASH", "BANK_TRANSFER", "CHECK", "CREDIT_CARD", "DEBIT_CARD", "PAYPAL", "WIRE_TRANSFER", "OTHER"}
 
 
@@ -147,10 +146,6 @@ class PayPalClient:
 
     def get_invoice(self, invoice_id: str) -> dict:
         return self._request("GET", f"/v2/invoicing/invoices/{invoice_id}")
-
-    def list_invoices(self, page_size: int = 50) -> list[dict]:
-        data = self._request("GET", "/v2/invoicing/invoices", params={"page": 1, "page_size": page_size, "total_required": "true"})
-        return data.get("items", []) if isinstance(data, dict) else []
 
     def remind_invoice(self, invoice_id: str, note: str = "") -> dict:
         return self._request("POST", f"/v2/invoicing/invoices/{invoice_id}/remind", json=_drop_none({"note": note or None}))
