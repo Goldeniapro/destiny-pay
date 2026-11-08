@@ -80,3 +80,24 @@ def test_transcript_markup_is_removed():
     from app.voice import clean_transcript
     assert clean_transcript("<|speaker:0|> [excited] Done! I sent Sarah   the invoice.") == "Done! I sent Sarah the invoice."
     assert clean_transcript("<|speaker:0|> [alegre] Cóbrale a Juan 3 tés") == "Cóbrale a Juan 3 tés"
+
+
+def test_each_language_can_have_its_own_voice(monkeypatch):
+    monkeypatch.setenv("FISH_API_KEY", "k")
+    monkeypatch.setenv("FISH_VOICE_ID", "")
+    monkeypatch.setenv("FISH_VOICE_ID_ES", "voz-es")
+    monkeypatch.setenv("FISH_VOICE_ID_EN", "voice-en")
+    used = []
+
+    def fish(req):
+        import json as _j
+        used.append(_j.loads(req.content)["reference_id"])
+        return httpx.Response(200, content=b"mp3")
+
+    v = Voice(transport=httpx.MockTransport(fish))
+    v.api_key = "k"
+    assert v.tts_enabled
+    b"".join(v.stream(v.register("Hola", "es")))
+    b"".join(v.stream(v.register("Hello", "en")))
+    assert used == ["voz-es", "voice-en"]
+    assert v.register("Olá", "pt") is None  # no Portuguese voice and no fallback: the browser speaks it

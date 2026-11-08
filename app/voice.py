@@ -1,4 +1,7 @@
-"""Destiny Pay's own voice (Fish Audio): one brand voice in all three languages, plus server speech-to-text.
+"""Destiny Pay's own voice (Fish Audio): a native voice per language, plus server speech-to-text.
+
+A voice trained in one language sounds foreign in another, so each language can have its own voice
+(FISH_VOICE_ID_ES, FISH_VOICE_ID_EN, FISH_VOICE_ID_PT); FISH_VOICE_ID is the fallback for any of them.
 
 Only texts the server itself produced can be spoken (replies, alerts, briefings), so the endpoint
 can't be used as a free text-to-speech service. Both features are optional: without FISH_API_KEY
@@ -31,6 +34,7 @@ class Voice:
                  transport: httpx.BaseTransport | None = None) -> None:
         self.api_key = api_key if api_key is not None else os.environ.get("FISH_API_KEY", "")
         self.voice_id = voice_id if voice_id is not None else os.environ.get("FISH_VOICE_ID", "")
+        self.voices = {lang: os.environ.get(f"FISH_VOICE_ID_{lang.upper()}", "") for lang in SPEECH_LANG} if voice_id is None else {}
         self.model = model or os.environ.get("FISH_MODEL", "s2.1-pro")
         self.asr_model = os.environ.get("FISH_ASR_MODEL", "transcribe-1-pro")
         self.daily_bytes = int(os.environ.get("DP_TTS_DAILY_BYTES", "2000000"))  # ~US$30/day at US$15 per million bytes
@@ -42,9 +46,12 @@ class Voice:
         self._lock = threading.Lock()
         self._day, self._used = time.strftime("%Y-%m-%d"), 0
 
+    def voice_for(self, lang: str) -> str:
+        return self.voices.get(lang) or self.voice_id
+
     @property
     def tts_enabled(self) -> bool:
-        return bool(self.api_key and self.voice_id)
+        return bool(self.api_key and (self.voice_id or any(self.voices.values())))
 
     @property
     def stt_enabled(self) -> bool:
@@ -54,8 +61,8 @@ class Voice:
     def register(self, text: str, lang: str) -> str | None:
         """Allow the server's own text to be spoken; returns the id the page uses to fetch the audio."""
         text = (text or "").strip()
-        if not self.tts_enabled or not text:
-            return None
+        if not self.api_key or not text or not self.voice_for(lang):
+            return None  # no voice for this language: the browser speaks it
         sid = secrets.token_urlsafe(12)
         with self._lock:
             self._texts[sid] = (text[:800], lang, time.time())
@@ -82,7 +89,8 @@ class Voice:
     def stream(self, sid: str) -> Iterator[bytes]:
         """Yield mp3 bytes as Fish Audio produces them (raises VoiceError before the first byte on failure)."""
         text, lang = self._take(sid)
-        key = hashlib.sha256(f"{self.voice_id}|{self.model}|{text}".encode()).hexdigest()
+        voice_id = self.voice_for(lang)
+        key = hashlib.sha256(f"{voice_id}|{self.model}|{text}".encode()).hexdigest()
         with self._lock:
             cached = self._audio.get(key)
             if cached is not None:
@@ -90,7 +98,7 @@ class Voice:
         if cached is not None:
             return iter([cached])
         self._charge(len(text.encode("utf-8")))
-        body = {"text": text, "reference_id": self.voice_id, "format": "mp3", "mp3_bitrate": 128,
+        body = {"text": text, "reference_id": voice_id, "format": "mp3", "mp3_bitrate": 128,
                 "latency": "balanced", "chunk_length": 200, "normalize": True, "language": SPEECH_LANG.get(lang, "en")}
         req = self._http.build_request("POST", "/v1/tts", json=body,
                                        headers={"Authorization": f"Bearer {self.api_key}", "model": self.model})
