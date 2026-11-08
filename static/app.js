@@ -470,7 +470,7 @@
     if (name === "bills") return [
       { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: 170, cellRenderer: twoLines },
       { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 115, flex: 0.9 },
-      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 90, flex: 0.7, sort: "asc" },
+      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 118, flex: 0.8, sort: "asc" },
       { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 120, flex: 0.9 },
       { headerName: t("col_actions"), cellRenderer: billActions, width: 155, sortable: false },
     ];
