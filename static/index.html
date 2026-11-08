@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Destiny Pay</title>
+<style>
+  :root { --bg:#0f1220; --card:#1a1f35; --text:#eef0f7; --muted:#9aa3c0; --accent:#ffc439; --ok:#3ecf8e; --warn:#f5a524; --bad:#ef5d5d; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:20px 16px 8px; max-width:960px; margin:auto; }
+  h1 { margin:0; font-size:1.6rem; } h1 span { color:var(--accent); }
+  header p { margin:4px 0 0; color:var(--muted); }
+  main { display:grid; grid-template-columns: 1fr 1fr; gap:16px; padding:16px; max-width:960px; margin:auto; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border-radius:14px; padding:16px; }
+  #log { height:380px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; }
+  .msg { padding:8px 12px; border-radius:10px; max-width:85%; line-height:1.35; }
+  .me { align-self:flex-end; background:#2c3560; } .bot { align-self:flex-start; background:#11152a; border:1px solid #2c3560; }
+  .action { align-self:flex-start; font-size:.8rem; color:var(--muted); }
+  form { display:flex; gap:8px; margin-top:12px; }
+  input { flex:1; padding:12px; border-radius:10px; border:1px solid #2c3560; background:#11152a; color:var(--text); font-size:1rem; }
+  button { padding:12px 16px; border:0; border-radius:10px; font-weight:600; cursor:pointer; }
+  #mic { background:var(--accent); color:#111; font-size:1.1rem; } #mic.on { background:var(--bad); color:#fff; }
+  #send { background:#2c3560; color:var(--text); }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  th, td { text-align:left; padding:6px 4px; border-bottom:1px solid #2c3560; }
+  .st { font-weight:600; } .PAID,.MARKED_AS_PAID { color:var(--ok); } .SENT,.UNPAID,.PARTIALLY_PAID { color:var(--warn); } .CANCELLED { color:var(--bad); }
+  .hint { color:var(--muted); font-size:.85rem; margin-top:8px; }
+  .badge { display:inline-block; font-size:.75rem; padding:2px 8px; border-radius:99px; background:#2c3560; margin-left:8px; vertical-align:middle; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Destiny <span>Pay</span> <span id="mode" class="badge"></span></h1>
+  <p>Tu cajera por voz: cobra, consulta y recuerda pagos con PayPal hablando en español.</p>
+</header>
+<main>
+  <section class="card">
+    <div id="log"></div>
+    <form id="f">
+      <button type="button" id="mic" title="Hablar">🎙️</button>
+      <input id="t" placeholder='Ej.: "Cóbrale a Juan Pérez 3 cajas de té a 12 dólares, juan@correo.com"' autocomplete="off">
+      <button id="send">Enviar</button>
+    </form>
+    <p class="hint">Prueba: "¿Quién me debe?" · "Recuérdale a Juan" · "Cancela la factura de Juan" · "¿Ya pagó Juan?"</p>
+  </section>
+  <section class="card">
+    <h3 style="margin-top:0">Facturas</h3>
+    <table><thead><tr><th>Cliente</th><th>Total</th><th>Estado</th><th></th></tr></thead><tbody id="inv"></tbody></table>
+  </section>
+</main>
+<script>
+const sid = crypto.randomUUID();
+const log = document.getElementById('log'), input = document.getElementById('t'), mic = document.getElementById('mic');
+
+function add(cls, text) {
+  const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
+  log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
+}
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(text); u.lang = 'es-419'; speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+async function refresh() {
+  const r = await fetch('/api/invoices'); if (!r.ok) return;
+  const rows = await r.json();
+  document.getElementById('inv').innerHTML = rows.slice().reverse().map(i =>
+    `<tr><td>${esc(i.recipient || '')}</td><td>${esc(i.total || '')}</td><td class="st ${esc(i.status || '')}">${esc(i.status || '')}</td>` +
+    `<td>${i.payer_link ? `<a href="${encodeURI(i.payer_link)}" target="_blank" rel="noopener">pagar</a>` : ''}</td></tr>`).join('');
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function send(text) {
+  if (!text.trim()) return;
+  add('me', text); input.value = '';
+  const wait = add('bot', '…');
+  try {
+    const r = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: sid, message: text})});
+    const data = await r.json();
+    wait.remove();
+    for (const a of data.actions || []) add('action', a.error ? `⚠️ ${a.tool}: ${a.error}` : `✔ ${a.tool}`);
+    add('bot', data.reply); speak(data.reply); refresh();
+  } catch (e) { wait.textContent = 'Error de conexión.'; }
+}
+document.getElementById('f').addEventListener('submit', e => { e.preventDefault(); send(input.value); });
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {
+  const rec = new SR(); rec.lang = 'es-PE'; rec.interimResults = false;
+  rec.onresult = e => send(e.results[0][0].transcript);
+  rec.onend = () => mic.classList.remove('on');
+  mic.onclick = () => { if (mic.classList.contains('on')) { rec.stop(); } else { mic.classList.add('on'); rec.start(); } };
+} else { mic.title = 'Tu navegador no soporta dictado; escribe el pedido.'; mic.disabled = true; }
+
+fetch('/api/status').then(r => r.json()).then(s => { document.getElementById('mode').textContent = s.demo_mode ? 'modo demo' : 'PayPal ' + s.paypal_env; });
+refresh();
+add('bot', 'Hola, soy Destiny Pay. Dime a quién le cobro y qué le vendiste.');
+</script>
+</body>
+</html>
