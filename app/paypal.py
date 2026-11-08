@@ -173,10 +173,50 @@ class PayPalClient:
 
     def qr_code(self, invoice_id: str, size: int = 300) -> str:
         """Base64 PNG of the invoice payment QR (invoice must be sent)."""
-        out = self._request("POST", f"/v2/invoicing/invoices/{invoice_id}/generate-qr-code", json={"width": size, "height": size})
+        out = self._request("POST", f"/v2/invoicing/invoices/{invoice_id}/generate-qr-code", json={"width": size, "height": size, "action": "pay"})
         if isinstance(out, dict):
             return out.get("image") or out.get("qr_code") or ""
         return _extract_base64(out)
+
+    # --- payouts (pay a supplier by email) -----------------------------------------
+    def create_payout(self, sender_batch_id: str, receiver_email: str, amount: float, note: str = "", subject: str = "") -> dict:
+        """One-recipient payout. PayPal refuses a repeated sender_batch_id, so a bill can never be paid twice."""
+        body = {
+            "sender_batch_header": {
+                "sender_batch_id": sender_batch_id,
+                "email_subject": (subject or "You have a payment")[:255],
+                "email_message": (note or "Payment sent with Destiny Pay")[:1000],
+            },
+            "items": [{
+                "recipient_type": "EMAIL",
+                "receiver": receiver_email,
+                "amount": {"value": f"{float(amount):.2f}", "currency": self.currency},
+                "note": (note or "Payment sent with Destiny Pay")[:4000],
+                "sender_item_id": sender_batch_id[:63],
+            }],
+        }
+        return self._request("POST", "/v1/payments/payouts", json=body)
+
+    def get_payout(self, payout_batch_id: str) -> dict:
+        return self._request("GET", f"/v1/payments/payouts/{payout_batch_id}")
+
+    # --- webhooks ------------------------------------------------------------
+    def verify_webhook(self, headers: dict, event: dict, webhook_id: str) -> bool:
+        """Ask PayPal whether a webhook delivery is genuine (headers are case-insensitive)."""
+        h = {k.lower(): v for k, v in headers.items()}
+        body = {
+            "auth_algo": h.get("paypal-auth-algo", ""),
+            "cert_url": h.get("paypal-cert-url", ""),
+            "transmission_id": h.get("paypal-transmission-id", ""),
+            "transmission_sig": h.get("paypal-transmission-sig", ""),
+            "transmission_time": h.get("paypal-transmission-time", ""),
+            "webhook_id": webhook_id,
+            "webhook_event": event,
+        }
+        if not all(body[k] for k in ("auth_algo", "cert_url", "transmission_id", "transmission_sig", "transmission_time", "webhook_id")):
+            return False
+        out = self._request("POST", "/v1/notifications/verify-webhook-signature", json=body)
+        return isinstance(out, dict) and out.get("verification_status") == "SUCCESS"
 
 
 def summarize(inv: dict) -> dict:

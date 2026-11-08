@@ -3,18 +3,30 @@ services:
   - type: web
     name: destiny-pay
     runtime: python
-    plan: starter            # free also works, but it sleeps when idle and the first visit takes ~1 minute
+    plan: starter            # always on (the free plan sleeps) and allows the persistent disk below
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /healthz
+    disk:                    # the business memory (SQLite) survives deploys and restarts
+      name: destiny-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.10
+      - key: DP_DB_PATH
+        value: /var/data/destiny_pay.db
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: PAYPAL_CLIENT_ID
         sync: false
       - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID      # after creating the webhook for https://<your-app>/api/paypal/webhook
+        sync: false
+      - key: FISH_API_KEY           # optional: Destiny Pay's own voice
+        sync: false
+      - key: FISH_VOICE_ID
         sync: false
       - key: PAYPAL_ENV
         value: sandbox
@@ -22,5 +34,3 @@ services:
         value: USD
       - key: DP_EFFORT
         value: low
-      - key: DP_DAILY_TOKEN_BUDGET
-        value: "3000000"

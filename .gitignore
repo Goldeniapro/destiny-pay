@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 sandbox_qr.png
 .DS_Store
+data/
