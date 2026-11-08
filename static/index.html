@@ -93,6 +93,7 @@
       <option value="pt">Português</option>
     </select>
     <button type="button" class="icon-btn" id="mute" aria-pressed="false">🔊</button>
+    <button type="button" class="icon-btn" id="reset">↺</button>
   </div>
 </header>
 <div class="notice" id="notice" hidden><p id="notice-text"></p></div>
@@ -136,7 +137,7 @@ const I18N = {
   es: {
     tagline: "Tu cajera por voz: cobra a tus clientes con facturas de PayPal, revisa quién te debe y registra pagos, solo hablando.",
     placeholder: "Escribe o toca el micrófono…", send: "Enviar", lang: "Idioma", message: "Mensaje",
-    mic_start: "Hablar", mic_stop: "Dejar de escuchar", mute: "Silenciar voz", unmute: "Activar voz",
+    mic_start: "Hablar", mic_stop: "Dejar de escuchar", mute: "Silenciar voz", unmute: "Activar voz", reset: "Nueva sesión",
     st_idle: "Toca el micrófono y habla", st_listening: "Te escucho…", st_thinking: "Pensando…", st_speaking: "Hablando… (toca para interrumpir)",
     hint: "Di el nombre, el correo y lo que vendiste. Te pediré confirmar antes de enviar.",
     thinking: "Pensando…",
@@ -160,7 +161,7 @@ const I18N = {
   en: {
     tagline: "Your voice cashier: bill customers with PayPal invoices, check who owes you and record payments, just by talking.",
     placeholder: "Type or tap the microphone…", send: "Send", lang: "Language", message: "Message",
-    mic_start: "Speak", mic_stop: "Stop listening", mute: "Mute voice", unmute: "Unmute voice",
+    mic_start: "Speak", mic_stop: "Stop listening", mute: "Mute voice", unmute: "Unmute voice", reset: "New session",
     st_idle: "Tap the microphone and talk", st_listening: "Listening…", st_thinking: "Thinking…", st_speaking: "Speaking… (tap to interrupt)",
     hint: "Say the customer's name, email and what you sold. I'll ask you to confirm before sending.",
     thinking: "Thinking…",
@@ -184,7 +185,7 @@ const I18N = {
   pt: {
     tagline: "Sua caixa por voz: cobre clientes com faturas do PayPal, veja quem te deve e registre pagamentos, só falando.",
     placeholder: "Digite ou toque no microfone…", send: "Enviar", lang: "Idioma", message: "Mensagem",
-    mic_start: "Falar", mic_stop: "Parar de ouvir", mute: "Silenciar voz", unmute: "Ativar voz",
+    mic_start: "Falar", mic_stop: "Parar de ouvir", mute: "Silenciar voz", unmute: "Ativar voz", reset: "Nova sessão",
     st_idle: "Toque no microfone e fale", st_listening: "Estou ouvindo…", st_thinking: "Pensando…", st_speaking: "Falando… (toque para interromper)",
     hint: "Diga o nome, o e-mail e o que você vendeu. Vou pedir confirmação antes de enviar.",
     thinking: "Pensando…",
@@ -262,12 +263,14 @@ function applyTexts() {
   $("status-hint").textContent = SR ? t("hint") : t("v_unsupported");
   if (!SR) mic.title = t("v_unsupported");
   updateMute();
+  $("reset").setAttribute("aria-label", t("reset"));
+  $("reset").title = t("reset");
   applyStatus();
   const chips = $("chips"); chips.textContent = "";
   for (const ex of t("examples")) {
     const c = document.createElement("button");
     c.type = "button"; c.className = "chip"; c.textContent = ex;
-    c.addEventListener("click", () => send(ex));
+    c.addEventListener("click", () => { cancelListening(); send(ex); });
     chips.appendChild(c);
   }
   setState(state);
@@ -275,6 +278,7 @@ function applyTexts() {
 
 function setState(s) {
   state = s;
+  if (s === "idle" && pendingSpeech.length && !busy) setTimeout(flushSpeech, 250);
   mic.dataset.state = s;
   $("status").textContent = t("st_" + s);
   mic.setAttribute("aria-label", s === "listening" ? t("mic_stop") : t("mic_start"));
@@ -310,7 +314,23 @@ function notice(text) {
 }
 
 // ---------- speech output ----------
-let voices = [], speakTimer = null;
+let voices = [], speakTimer = null, currentUtt = null, pendingSpeech = [], speechUnlocked = false;
+
+// iOS Safari only speaks after speech was started inside a user gesture: do it once, silently.
+function unlockSpeech() {
+  if (speechUnlocked || !("speechSynthesis" in window)) return;
+  speechUnlocked = true;
+  try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch (e) { /* not supported */ }
+}
+
+function flushSpeech() {
+  if (state === "idle" && !busy && pendingSpeech.length) speak(pendingSpeech.shift());
+}
+
+// Speak now if nothing else is happening; otherwise wait for the current reply to finish.
+function sayWhenIdle(text) {
+  if (state === "idle" && !busy) speak(text); else pendingSpeech.push(text);
+}
 function loadVoices() { try { voices = speechSynthesis.getVoices() || []; } catch (e) { voices = []; } }
 if ("speechSynthesis" in window) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
 
@@ -327,15 +347,22 @@ function speak(text) {
   const v = pickVoice();
   if (v) u.voice = v;
   u.lang = v ? v.lang : SPEECH_LANG[lang];
-  const done = () => { clearTimeout(speakTimer); if (state === "speaking") setState("idle"); };
+  currentUtt = u;
+  const done = () => {
+    if (currentUtt !== u) return;  // a cancelled, older utterance must not end the new one
+    currentUtt = null;
+    clearTimeout(speakTimer);
+    if (state === "speaking") setState("idle");
+  };
   u.onend = done; u.onerror = done;
   setState("speaking");
-  setTimeout(() => speechSynthesis.speak(u), 60);  // Chrome can drop an utterance queued right after cancel()
+  setTimeout(() => { if (currentUtt === u) speechSynthesis.speak(u); }, 60);  // Chrome can drop an utterance queued right after cancel()
   clearTimeout(speakTimer);
-  speakTimer = setTimeout(done, 5000 + text.length * 90);  // some browsers never fire onend
+  speakTimer = setTimeout(done, 3000 + text.length * 75);  // some browsers never fire onend
 }
 
 function stopSpeaking() {
+  currentUtt = null;
   if ("speechSynthesis" in window) speechSynthesis.cancel();
   clearTimeout(speakTimer);
   if (state === "speaking") setState("idle");
@@ -351,12 +378,13 @@ function updateMute() {
 
 // ---------- speech input ----------
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let rec = null, finalText = "", recError = null;
+let rec = null, finalText = "", recError = null, recCancelled = false;
 
 function startListening() {
   if (!SR || busy) return;
+  pendingSpeech = [];
   stopSpeaking();  // barge-in: never listen while the assistant is talking (no echo)
-  finalText = ""; recError = null; input.value = "";
+  finalText = ""; recError = null; recCancelled = false; input.value = "";
   rec = new SR();
   rec.lang = SPEECH_LANG[lang];
   rec.interimResults = true;
@@ -373,6 +401,11 @@ function startListening() {
   rec.onerror = e => { recError = e.error; };
   rec.onend = () => {
     rec = null;
+    if (recCancelled) {  // the owner cancelled, or a chip / typed message took over
+      recCancelled = false; finalText = "";
+      if (state === "listening") { input.value = ""; setState("idle"); }
+      return;
+    }
     const text = (finalText || input.value).trim();
     if (text) { send(text); return; }
     setState("idle");
@@ -383,12 +416,17 @@ function startListening() {
   try { rec.start(); setState("listening"); } catch (e) { rec = null; setState("idle"); add("bot", t("v_generic")); }
 }
 
-function stopListening() { if (rec) { try { rec.stop(); } catch (e) { /* already stopped */ } } }
+function stopListening() { if (rec) { try { rec.stop(); } catch (e) { /* already stopped */ } } }  // sends what was heard
+function cancelListening() {  // discards what was heard
+  if (!rec) return;
+  recCancelled = true;
+  try { rec.abort(); } catch (e) { rec = null; recCancelled = false; setState("idle"); }
+}
 
 mic.addEventListener("click", () => {
+  unlockSpeech();
   if (state === "listening") stopListening();
-  else if (state === "speaking") stopSpeaking();
-  else startListening();
+  else startListening();  // while speaking, this interrupts the assistant and listens right away
 });
 if (!SR) mic.disabled = true;
 
@@ -396,6 +434,8 @@ if (!SR) mic.disabled = true;
 async function send(text) {
   text = String(text || "").trim();
   if (!text || busy) return;
+  unlockSpeech();
+  pendingSpeech = [];
   stopSpeaking();
   busy = true; input.value = "";
   add("me", text);
@@ -418,14 +458,15 @@ async function send(text) {
   for (const u of data.ui || []) if (u && u.qr_png_base64) showQR(u);
   const reply = data.reply || t("server");
   add("bot", reply);
-  if (data.error && !(data.actions || []).length) input.value = text;  // nothing happened: let the owner resend it
+  if (data.error && data.error !== "session_full" && !(data.actions || []).length) input.value = text;  // nothing happened: let the owner resend it
   busy = false;
   speak(reply);
+  if (data.error === "session_full") { newSession(true); return; }
   refresh();
 }
 
-$("f").addEventListener("submit", e => { e.preventDefault(); send(input.value); });
-document.addEventListener("keydown", e => { if (e.key === "Escape") { stopListening(); stopSpeaking(); } });
+$("f").addEventListener("submit", e => { e.preventDefault(); const text = input.value; cancelListening(); send(text); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { cancelListening(); pendingSpeech = []; stopSpeaking(); } });
 
 // ---------- invoices ----------
 function pillClass(s) { return PAID.has(s) ? "ok" : OPEN.has(s) ? "warn" : BAD.has(s) ? "bad" : ""; }
@@ -477,7 +518,7 @@ async function refresh() {
 function announcePaid(i) {
   const text = t("paid")(i.recipient || i.email || "", i.total || "");
   add("bot paid", text);
-  if (!busy && state !== "listening") speak(text);
+  sayWhenIdle(text);
 }
 
 async function simulatePay(id, btn) {
@@ -512,18 +553,26 @@ $("qr-close").addEventListener("click", () => { $("qr").hidden = true; });
 setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 8000);
 
 // ---------- language & sound ----------
-function newSession() {
+function newSession(keepLog) {
   sid = uuid(); store.set("dp_sid", sid);
   known = new Map(); rowsById = new Map();
-  log.textContent = ""; $("qr").hidden = true; render([]);
+  if (!keepLog) log.textContent = "";
+  $("qr").hidden = true; render([]);
 }
 
 $("lang").addEventListener("change", e => {
-  stopListening(); stopSpeaking();
+  cancelListening(); pendingSpeech = []; stopSpeaking();
   lang = I18N[e.target.value] ? e.target.value : "en";
   store.set("dp_lang", lang);
   newSession();  // the assistant's language is fixed per conversation
   applyTexts();
+  add("bot", t("greet"));
+});
+
+$("reset").addEventListener("click", () => {
+  if (busy) return;
+  cancelListening(); pendingSpeech = []; stopSpeaking();
+  newSession();
   add("bot", t("greet"));
 });
 

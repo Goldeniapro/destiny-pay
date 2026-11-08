@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import date
 
@@ -69,6 +70,9 @@ class PayPalClient:
         headers = {"Content-Type": "application/json"}
         if method != "GET":
             headers["Prefer"] = "return=representation"
+            # Same id on every retry: if PayPal already processed a request that timed out,
+            # the retry does not create a second invoice or record a payment twice.
+            headers["PayPal-Request-Id"] = str(uuid.uuid4())
         refreshed = force_token = False
         for attempt in range(3):
             try:
@@ -101,14 +105,16 @@ class PayPalClient:
 
     # --- invoicing ----------------------------------------------------------
     def create_invoice(self, recipient_name: str, recipient_email: str, items: list[dict], note: str = "", reference: str = "") -> dict:
-        """items: [{"name": str, "quantity": number, "unit_price": number}]"""
-        number = self._request("POST", "/v2/invoicing/generate-next-invoice-number").get("invoice_number")
+        """items: [{"name": str, "quantity": number, "unit_price": number}]
+
+        The invoice number is left to PayPal, which auto-increments it: asking for the next number first
+        would race when two sessions create invoices at the same time.
+        """
         given, _, surname = recipient_name.strip().partition(" ")
         body = {
             "detail": {
                 "currency_code": self.currency,
                 "note": note or None,
-                "invoice_number": number,
                 "reference": reference or None,
             },
             "primary_recipients": [
@@ -123,7 +129,15 @@ class PayPalClient:
                 for it in items
             ],
         }
-        return self._request("POST", "/v2/invoicing/invoices", json=_drop_none(body))
+        body = _drop_none(body)
+        try:
+            return self._request("POST", "/v2/invoicing/invoices", json=body)
+        except PayPalError as e:
+            if "invoice_number" not in str(e).lower():
+                raise
+            # Fallback in case this account requires an explicit number.
+            body["detail"]["invoice_number"] = self._request("POST", "/v2/invoicing/generate-next-invoice-number").get("invoice_number")
+            return self._request("POST", "/v2/invoicing/invoices", json=body)
 
     def send_invoice(self, invoice_id: str) -> dict:
         return self._request(

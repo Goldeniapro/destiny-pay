@@ -38,9 +38,9 @@ No microphone? Type in the box: it is the same agent.
 | _(customer pays online)_ | Announces the payment out loud | status polling |
 
 ## Designed so the agent can be trusted with money
-- **Two-step charges.** The agent can only create drafts on its own. Sending requires the owner's explicit confirmation in a later turn.
+- **Two-step charges, enforced in code.** The agent can only create drafts on its own. The server refuses to send a draft in the same turn it was created, so sending always needs the owner's confirmation in a later message.
 - **Validated inputs.** Emails dictated as words ("arroba", "at", "ponto") are normalized and checked; quantities, prices and totals have hard limits; the agent never invents an email.
-- **No double charges.** An identical draft requested twice within two minutes is reused, not duplicated.
+- **No double charges.** An identical draft requested twice within two minutes is reused, PayPal requests carry idempotency keys, and if a reply fails after a payment was recorded, the agent remembers it and never records it again.
 - **Isolation.** Every browser session only sees and acts on the invoices it created, even though all visitors share one sandbox merchant.
 - **Tool results are data, not instructions.** Every tool call gets a result, errors are explained in plain words, and a failed turn is rolled back so the conversation never breaks.
 - **Bounded cost.** Per-IP and global rate limits, a per-session turn cap and a daily token budget protect the public demo.
@@ -86,7 +86,7 @@ Without PayPal credentials the app runs in **demo mode** with in-memory invoices
 
 Checks:
 ```bash
-pytest -q                                              # 35 offline tests, no keys needed
+pytest -q                                              # 47 offline tests, no keys needed
 python scripts/agent_smoke.py                          # real Claude, 3 languages, in-memory PayPal
 python scripts/sandbox_smoke.py you-buyer@personal.example.com   # real PayPal sandbox, end to end
 ```

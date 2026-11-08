@@ -45,6 +45,9 @@ class RateLimiter:
     def allow(self, key: str) -> bool:
         now = time.time()
         with self._lock:
+            if len(self.hits) > 5000:  # forget idle keys so spoofed ones can't grow memory forever
+                for k in [k for k, q in self.hits.items() if not q or now - q[-1] > 60]:
+                    del self.hits[k]
             q = self.hits[key]
             while q and now - q[0] > 60:
                 q.popleft()
@@ -55,8 +58,11 @@ class RateLimiter:
 
 
 chat_limiter = RateLimiter(int(os.environ.get("DP_CHAT_PER_MINUTE", "12")))
-# The forwarded IP can be spoofed, so a global cap backs it up (together with the daily token budget).
+invoices_limiter = RateLimiter(int(os.environ.get("DP_INVOICES_PER_MINUTE", "60")))
+# The forwarded IP can be spoofed, so server-wide caps back it up (with the daily token budget):
+# total chat requests, and new sessions (so nobody can flood the session store and evict real visitors).
 global_limiter = RateLimiter(int(os.environ.get("DP_GLOBAL_PER_MINUTE", "90")))
+new_session_limiter = RateLimiter(int(os.environ.get("DP_NEW_SESSIONS_PER_MINUTE", "30")))
 
 
 def client_ip(request: Request) -> str:
@@ -95,6 +101,8 @@ def healthz():
 def chat(body: ChatIn, request: Request):
     if not chat_limiter.allow(client_ip(request)) or not global_limiter.allow("all"):
         raise HTTPException(429, "Too many requests. Wait a minute and try again.")
+    if agent.sessions.peek(body.session_id) is None and not new_session_limiter.allow("all"):
+        raise HTTPException(429, "Too many new sessions. Wait a minute and try again.")
     text = body.message.strip()
     if not text:
         raise HTTPException(400, "Empty message")
@@ -102,7 +110,9 @@ def chat(body: ChatIn, request: Request):
 
 
 @app.get("/api/invoices")
-def invoices(session_id: str = Query(**SESSION_ID)):
+def invoices(request: Request, session_id: str = Query(**SESSION_ID)):
+    if not invoices_limiter.allow(client_ip(request)):
+        raise HTTPException(429, "Too many requests.")
     session = agent.sessions.peek(session_id)
     if session is None:
         return []
@@ -119,7 +129,7 @@ def demo_pay(invoice_id: str, session_id: str = Query(**SESSION_ID)):
     if not DEMO_MODE or session is None or invoice_id not in session.backend.ids:
         raise HTTPException(404, "Not available")
     try:
-        session.backend.backend.mark_paid(invoice_id)
+        session.backend.mark_paid(invoice_id)
     except PayPalError as e:
         raise HTTPException(409, str(e))
     return {"ok": True}

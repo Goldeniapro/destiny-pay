@@ -61,9 +61,12 @@ MESSAGES = {
     "refusal": {"es": "Lo siento, no puedo ayudar con ese pedido.",
                 "en": "Sorry, I can't help with that request.",
                 "pt": "Desculpe, não posso ajudar com esse pedido."},
-    "session_full": {"es": "Esta sesión de demostración llegó a su límite. Recarga la página para empezar otra.",
-                     "en": "This demo session reached its limit. Reload the page to start a new one.",
-                     "pt": "Esta sessão de demonstração chegou ao limite. Recarregue a página para começar outra."},
+    "session_full": {"es": "Esta sesión de demostración llegó a su límite, así que empecé una nueva.",
+                     "en": "This demo session reached its limit, so I started a new one.",
+                     "pt": "Esta sessão de demonstração chegou ao limite, então comecei uma nova."},
+    "partial": {"es": "Alcancé a hacer lo que ves marcado en verde, pero no pude terminar mi respuesta. Revisa la tabla de facturas antes de repetir el pedido.",
+                "en": "I completed the steps marked in green, but couldn't finish my reply. Check the invoice table before repeating the request.",
+                "pt": "Concluí as etapas marcadas em verde, mas não consegui terminar a resposta. Confira a tabela de faturas antes de repetir o pedido."},
     "budget": {"es": "La demo alcanzó su límite de uso por hoy. Vuelve mañana, por favor.",
                "en": "The demo reached its usage limit for today. Please come back tomorrow.",
                "pt": "A demo atingiu o limite de uso de hoje. Volte amanhã, por favor."},
@@ -166,7 +169,12 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
-_SPOKEN = [(r"\s*(arroba|at)\s*", "@"), (r"\s*(punto|dot|ponto)\s*", "."), (r"\s*(guion bajo|underscore)\s*", "_"), (r"\s*(guion|dash|hífen|hifen)\s*", "-")]
+_SPOKEN = [
+    (r"\s*\b(arroba|at)\b\s*", "@"),
+    (r"\s*\b(punto|dot|ponto)\b\s*", "."),
+    (r"\s*\b(guion bajo|guión bajo|underscore)\b\s*", "_"),
+    (r"\s*\b(guion|guión|dash|hífen|hifen)\b\s*", "-"),
+]
 
 
 def normalize_email(raw: str) -> str:
@@ -217,7 +225,8 @@ class Session:
     lock: threading.Lock = field(default_factory=threading.Lock)
     turns: int = 0
     last_seen: float = field(default_factory=time.time)
-    recent_drafts: dict[tuple[str, float], tuple[str, float]] = field(default_factory=dict)
+    recent_drafts: dict[tuple, tuple[str, float]] = field(default_factory=dict)
+    draft_turn: dict[str, int] = field(default_factory=dict)  # invoice id -> turn in which it was drafted
 
 
 def run_tool(session: Session, name: str, args: dict) -> tuple[str, dict | None]:
@@ -225,14 +234,19 @@ def run_tool(session: Session, name: str, args: dict) -> tuple[str, dict | None]
     b = session.backend
     if name == "draft_invoice":
         rname, email, items, note, total = validate_draft(args)
-        key = (email, total)
+        key = (rname.lower(), email, json.dumps(items, sort_keys=True), note)  # any correction makes a new draft
         prev = session.recent_drafts.get(key)
         if prev and time.time() - prev[1] < 120:
             return json.dumps({"duplicate_of": prev[0], "message": "An identical draft was just created; reuse it."}), None
         inv = b.create_invoice(rname, email, items, note)
         session.recent_drafts[key] = (inv["id"], time.time())
+        session.draft_turn[inv["id"]] = session.turns
         return json.dumps({**summarize(b.get_invoice(inv["id"])), "currency": b.currency}, ensure_ascii=False), None
     if name == "send_invoice":
+        if session.draft_turn.get(args["invoice_id"]) == session.turns:
+            # Enforced in code, not only in the prompt: the owner must confirm in a later message.
+            raise ValidationError("Not sent. The owner has not confirmed this draft yet: read back the customer, "
+                                  "total and email, and send it only after they confirm in their next message.")
         b.send_invoice(args["invoice_id"])
         return json.dumps(summarize(b.get_invoice(args["invoice_id"])), ensure_ascii=False), None
     if name == "list_invoices":
@@ -322,6 +336,7 @@ class SessionStore:
             s = self._data.get(session_id)
             if s is not None:
                 s.last_seen = time.time()
+                self._data.move_to_end(session_id)
             return s
 
 
@@ -346,15 +361,15 @@ class DestinyPayAgent:
         return SYSTEM_TEMPLATE.format(lang_name=LANGS[session.lang], currency=session.backend.currency)
 
     def chat(self, session_id: str, user_text: str, lang: str = "es") -> dict:
+        if self.budget.exhausted():
+            return {"reply": msg("budget", lang if lang in LANGS else "en"), "actions": [], "error": "budget"}
         session = self.sessions.get(session_id, lang)
         lang = session.lang
         if not session.lock.acquire(blocking=False):
             return {"reply": msg("busy", lang), "actions": [], "busy": True}
         try:
             if session.turns >= MAX_TURNS_PER_SESSION:
-                return {"reply": msg("session_full", lang), "actions": []}
-            if self.budget.exhausted():
-                return {"reply": msg("budget", lang), "actions": []}
+                return {"reply": msg("session_full", lang), "actions": [], "error": "session_full"}
             session.turns += 1
             return self._run(session, user_text)
         finally:
@@ -367,9 +382,17 @@ class DestinyPayAgent:
         actions: list[dict] = []
         ui: list[dict] = []
 
-        def rollback(key: str) -> dict:
-            del messages[start:]  # keep history valid: drop the whole failed turn
-            return {"reply": msg(key, lang), "actions": actions, "ui": ui, "error": key}
+        def fail(key: str) -> dict:
+            done = [a["tool"] for a in actions if "error" not in a]
+            if not done:
+                del messages[start:]  # nothing happened: drop the whole turn so the owner can simply repeat it
+                return {"reply": msg(key, lang), "actions": actions, "ui": ui, "error": key}
+            # Some tools already ran (a payment may be recorded): keep them in the history so they are never
+            # repeated, and close the turn. History always ends with the tool results at this point.
+            if messages[-1]["role"] == "user":
+                note = f"(My reply was interrupted after completing: {', '.join(done)}. Those actions are done; do not repeat them.)"
+                messages.append({"role": "assistant", "content": [{"type": "text", "text": note}]})
+            return {"reply": msg("partial", lang), "actions": actions, "ui": ui, "error": key}
 
         for _ in range(self.max_steps):
             try:
@@ -384,22 +407,34 @@ class DestinyPayAgent:
                     betas=["server-side-fallback-2026-07-01"],
                     fallbacks="default",
                 )
+            except anthropic.BadRequestError:
+                # The request itself was rejected, so the stored history may be unusable: start it fresh.
+                # Invoices live in PayPal and stay reachable through list_invoices.
+                result = fail("api_error")
+                messages.clear()
+                return result
             except anthropic.AnthropicError:  # rate limit, overload, network, missing key...
-                return rollback("api_error")
+                return fail("api_error")
             self.budget.add(getattr(response, "usage", None))
 
-            tool_uses = [b for b in response.content if b.type == "tool_use"]
             if response.stop_reason == "refusal":
-                return rollback("refusal")
+                return fail("refusal")
             if response.stop_reason == "max_tokens":
-                return rollback("too_long")
-            messages.append({"role": "assistant", "content": response.content})
+                return fail("too_long")
+            content = list(response.content or [])
+            tool_uses = [b for b in content if b.type == "tool_use"]
             if response.stop_reason == "pause_turn":
+                if content:
+                    messages.append({"role": "assistant", "content": content})
                 continue
             if response.stop_reason != "tool_use" or not tool_uses:
-                text = " ".join(b.text for b in response.content if b.type == "text").strip()
-                return {"reply": text or msg("done", lang), "actions": actions, "ui": ui}
+                text = " ".join(b.text for b in content if b.type == "text").strip()
+                reply = text or msg("done", lang)
+                # Never store an empty assistant turn: every later request would be rejected.
+                messages.append({"role": "assistant", "content": content if text else [*content, {"type": "text", "text": reply}]})
+                return {"reply": reply, "actions": actions, "ui": ui}
 
+            messages.append({"role": "assistant", "content": content})
             results = []
             for tu in tool_uses:
                 args = dict(tu.input) if isinstance(tu.input, dict) else {}
@@ -415,4 +450,4 @@ class DestinyPayAgent:
                     actions.append({"tool": tu.name, "error": err})
             messages.append({"role": "user", "content": results})
 
-        return rollback("steps")
+        return fail("steps")
