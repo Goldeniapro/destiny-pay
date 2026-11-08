@@ -74,3 +74,9 @@ def test_transcribe_sends_pro_model_and_language():
 
     v = Voice(api_key="k", voice_id="", transport=httpx.MockTransport(fish))
     assert v.transcribe(b"webm-bytes", "speech.webm", "audio/webm", "pt") == "Cobre a Maria"
+
+
+def test_transcript_markup_is_removed():
+    from app.voice import clean_transcript
+    assert clean_transcript("<|speaker:0|> [excited] Done! I sent Sarah   the invoice.") == "Done! I sent Sarah the invoice."
+    assert clean_transcript("<|speaker:0|> [alegre] Cóbrale a Juan 3 tés") == "Cóbrale a Juan 3 tés"

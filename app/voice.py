@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import secrets
 import threading
 import time
@@ -141,4 +142,12 @@ class Voice:
             raise VoiceError(f"speech service unreachable: {e.__class__.__name__}") from e
         if r.status_code != 200:
             raise VoiceError(f"speech service error {r.status_code}: {r.text[:200]}")
-        return str(r.json().get("text", "")).strip()
+        return clean_transcript(str(r.json().get("text", "")))
+
+
+def clean_transcript(text: str) -> str:
+    """Fish Audio's transcription adds markup such as <|speaker:0|> and emotion tags like [excited]; the agent must
+    only see what the owner said."""
+    text = re.sub(r"<\|[^|>]*\|>", " ", text)
+    text = re.sub(r"\[[^\]]{1,40}\]", " ", text)
+    return " ".join(text.split())
