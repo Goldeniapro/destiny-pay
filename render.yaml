@@ -26,14 +26,12 @@ services:
         sync: false
       - key: FISH_API_KEY           # optional: Destiny Pay's own voice
         sync: false
-      - key: FISH_VOICE_ID_ES      # a native voice per language (FISH_VOICE_ID is the fallback)
-        sync: false
+      - key: FISH_VOICE_ID_ES      # a native voice per language (public voice ids, not secrets)
+        value: bfed5c0810a347dbb62e8ccce7f59c48
       - key: FISH_VOICE_ID_EN
-        sync: false
+        value: 933563129e564b19a115bedd57b7406a
       - key: FISH_VOICE_ID_PT
-        sync: false
-      - key: FISH_VOICE_ID
-        sync: false
+        value: ca0326921a254a7295650b2cf85fe098
       - key: PAYPAL_ENV
         value: sandbox
       - key: DP_CURRENCY

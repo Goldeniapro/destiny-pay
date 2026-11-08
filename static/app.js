@@ -425,8 +425,8 @@
   const gridTheme = () => {
     const dark = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
     return agGrid.themeQuartz.withParams(dark
-      ? { backgroundColor: "#161b30", foregroundColor: "#eef0f8", headerBackgroundColor: "#1b2139", borderColor: "#2a3154", accentColor: "#6a95ff", fontSize: 13 }
-      : { backgroundColor: "#ffffff", foregroundColor: "#121829", headerBackgroundColor: "#f8f9fc", borderColor: "#e1e5ef", accentColor: "#2f6fed", fontSize: 13 });
+      ? { backgroundColor: "#0d1b3e", foregroundColor: "#eef3ff", headerBackgroundColor: "#122450", headerTextColor: "#cfe0ff", borderColor: "#22355f", accentColor: "#4da3ff", fontSize: 13, headerFontWeight: 700 }
+      : { backgroundColor: "#ffffff", foregroundColor: "#0b1a3c", headerBackgroundColor: "#f2f6fc", headerTextColor: "#003087", borderColor: "#dde3ee", accentColor: "#0070e0", fontSize: 13, headerFontWeight: 700 });
   };
   function pill(text, cls) { const s = document.createElement("span"); s.className = "pill " + (cls || ""); s.textContent = text; return s; }
   function statusPill(p) {
@@ -451,6 +451,12 @@
     b.addEventListener("click", () => send(t("cmd_pay_bill")(r.payee, r.id)));
     box.appendChild(b); return box;
   }
+  function twoLines(p) {  // payee in bold, what it is for underneath: nothing gets cut off
+    const r = p.data; const box = document.createElement("div"); box.className = "two-lines"; if (!r) return box;
+    const a = document.createElement("strong"); a.textContent = r.payee;
+    const b = document.createElement("span"); b.textContent = [r.description, t("recurrence")[r.recurrence]].filter(Boolean).join(" · ");
+    box.append(a, b); return box;
+  }
   function columns(name) {
     const m = p => p.value == null ? "" : money(p.value, p.data && p.data.currency);
     const d = p => fmtShort(p.value);
@@ -458,16 +464,15 @@
       { field: "customer", headerName: t("col_customer"), flex: 1.2, minWidth: 110 },
       { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: 115, flex: 0.9 },
       { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 95, flex: 0.8 },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 120, flex: 1 },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 125, flex: 1 },
       { headerName: t("col_actions"), cellRenderer: invoiceActions, width: 230, sortable: false },
     ];
     if (name === "bills") return [
-      { field: "payee", headerName: t("col_payee"), flex: 1.1, minWidth: 120 },
-      { field: "description", headerName: t("col_desc"), flex: 1.2, minWidth: 120, valueFormatter: p => [p.value, t("recurrence")[p.data.recurrence]].filter(Boolean).join(" · ") },
+      { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: 170, cellRenderer: twoLines },
       { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 115, flex: 0.9 },
-      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 95, flex: 0.8, sort: "asc" },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 105, flex: 0.9 },
-      { headerName: t("col_actions"), cellRenderer: billActions, width: 160, sortable: false },
+      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 90, flex: 0.7, sort: "asc" },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 120, flex: 0.9 },
+      { headerName: t("col_actions"), cellRenderer: billActions, width: 155, sortable: false },
     ];
     return [
       { field: "name", headerName: t("col_name"), flex: 1.2, minWidth: 140 },
@@ -480,8 +485,8 @@
     const el = $("grid-" + name);
     if (grids[name] && grids[name].__lang !== lang) { grids[name].destroy(); delete grids[name]; }  // rebuild so headers and texts follow the language
     if (!grids[name]) {
-      grids[name] = agGrid.createGrid(el, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name),
-        defaultColDef: { sortable: true, filter: false, resizable: true }, animateRows: true, rowHeight: 40,
+      grids[name] = agGrid.createGrid(el, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name), rowHeight: name === "bills" ? 54 : 44,
+        defaultColDef: { sortable: true, filter: false, resizable: true }, animateRows: true,
         localeText: { noRowsToShow: t("no_rows"), loadingOoo: "…" } });
       grids[name].__lang = lang; grids[name].__json = JSON.stringify(rows);
     } else {
