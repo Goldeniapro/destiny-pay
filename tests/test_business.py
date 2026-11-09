@@ -211,7 +211,8 @@ def test_pending_payout_settles_or_rolls_back_from_paypal_status(biz, monkeypatc
     assert done and "Te aviso cuando PayPal lo confirme" in reply and result["status"] == "processing"
     assert biz.overview()["expense"] == 0  # not counted until PayPal confirms
     biz.pay_bill_with_paypal(yarn["id"])
-    statuses = {f"B-dp{biz.ws[:10]}b{rent['id']}a1": "SUCCESS", f"B-dp{biz.ws[:10]}b{yarn['id']}a1": "RETURNED"}
+    from app.business import _tag
+    statuses = {f"B-dp{_tag(biz.ws)}b{rent['id']}a1": "SUCCESS", f"B-dp{_tag(biz.ws)}b{yarn['id']}a1": "RETURNED"}
     monkeypatch.setattr(biz.paypal, "get_payout", lambda bid: {"batch_header": {"payout_batch_id": bid, "batch_status": "SUCCESS"},
                                                                "items": [{"transaction_status": statuses[bid]}]})
     biz.check_payouts()
@@ -461,3 +462,44 @@ def test_demo_partial_payments_all_counted(biz):
     biz.record_payment(inv["id"], 40, "CASH")
     biz.record_payment(inv["id"], 60, "YAPE")
     assert biz.overview()["income"] == 100 and biz.invoice_view(inv["id"])["status"] == "MARKED_AS_PAID"
+
+
+def test_purge_forgets_idle_businesses_but_not_pending_work(make_biz):
+    import time as _t
+    idle, busy = make_biz(), make_biz()
+    idle.record_movement("income", "venta", 10)
+    from datetime import timedelta
+    busy.create_reminder("llamar al banco", (busy.now() + timedelta(days=1)).strftime("%Y-%m-%d %H:%M"))
+    idle.store.x("UPDATE workspaces SET last_seen=? WHERE id IN (?,?)", (_t.time() - 3 * 86400, idle.ws, busy.ws))
+    idle.store.purge(48 * 3600)
+    assert idle.store.workspace(idle.ws) is None and idle.store.q("SELECT * FROM movements WHERE ws=?", (idle.ws,)) == []
+    assert busy.store.workspace(busy.ws) is not None  # a reminder still to fire keeps the business
+
+
+def test_receivables_aging_trust_note_and_hold_risk(biz):
+    from datetime import timedelta
+    small = biz.draft_invoice("Ana", "ana@example.com", [{"name": "x", "quantity": 1, "unit_price": 100}], "")
+    biz.send_invoice(small["id"])
+    assert "Test Shop nunca te pedirá llamar" in biz.paypal.get_invoice(small["id"])["detail"]["note"]  # anti-phishing line
+    late = (biz.today() - timedelta(days=40)).isoformat()
+    biz.store.x("UPDATE invoices SET due_date=? WHERE id=?", (late, small["id"]))
+    assert biz.overview()["receivable_aging"] == {"not_due": 0.0, "d1_30": 0.0, "d31_60": 100.0, "d61_plus": 0.0}
+    big = biz.draft_invoice("Luis", "luis@example.com", [{"name": "lote", "quantity": 1, "unit_price": 900}], "")
+    assert "hold funds" in big["risk_note"]  # 9x the usual invoice: warn, never promise
+    normal = biz.draft_invoice("Eva", "eva@example.com", [{"name": "y", "quantity": 1, "unit_price": 120}], "")
+    assert "risk_note" not in normal
+
+
+def test_unclaimed_payout_gets_one_follow_up(biz, monkeypatch):
+    import time as _t
+    bill = biz.add_bill("Textiles", "Hilo", 100, biz.today().isoformat(), "none", "t@example.com")
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda sbid, *a, **k: {"batch_header": {"payout_batch_id": "B1", "batch_status": "PENDING"}})
+    monkeypatch.setattr(biz.paypal, "get_payout", lambda bid: {"batch_header": {"payout_batch_id": bid, "batch_status": "SUCCESS"},
+                                                               "items": [{"transaction_status": "UNCLAIMED"}]})
+    req = biz.request_confirmation("pay_bill", str(bill["id"]))
+    biz.resolve_confirmation(req["confirmation_id"], True, "es")
+    biz.check_payouts()
+    biz.store.x("UPDATE payouts SET created_at=?, checked_at=0 WHERE ws=?", (_t.time() - 4 * 86400, biz.ws))
+    biz.check_payouts(); biz.check_payouts()
+    keys = [a["key"] for a in biz.store.alerts_since(biz.ws, 0)]
+    assert keys.count("a_payout_unclaimed_follow") == 1

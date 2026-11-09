@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import calendar
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,9 @@ from .store import Store
 MAX_INVOICES = 60
 MAX_BILLS = 200
 MAX_FACTS = 100
+MAX_MOVEMENTS = 3000
+HOLD_RISK_FACTOR, HOLD_RISK_MIN = 3.0, 500.0  # "unusual change in activity" warning
+UNCLAIMED_FOLLOW_UP_DAYS = 3
 CONFIRMATION_TTL = 15 * 60
 PAYOUT_MAX = float(os.environ.get("DP_PAYOUT_MAX", "2000"))              # per payment
 PAYOUT_DAILY_WS = float(os.environ.get("DP_PAYOUT_DAILY_LIMIT", "3000"))   # per business per day
@@ -51,6 +55,11 @@ def normalize_email(raw: str) -> str:
         for pat, rep in _SPOKEN:
             e = re.sub(pat, rep, e)
     return re.sub(r"\s+", "", e)
+
+
+def _tag(ws: str) -> str:
+    """Short public tag for a business (invoice reference, payout batch id) that reveals nothing of its secret id."""
+    return hashlib.sha256(ws.encode()).hexdigest()[:10]
 
 
 def _clean(text: str, limit: int) -> str:
@@ -197,7 +206,9 @@ class Business:
         if recent and json.loads(recent["summary"]).get("items_key") == json.dumps(clean, sort_keys=True):
             return {**self.invoice_view(recent["id"]), "duplicate_of": recent["id"],
                     "message": "An identical draft was just created; reuse it instead of creating another."}
-        inv = self.paypal.create_invoice(name, email, clean, _clean(note, 500), reference=f"dp-{self.ws[:12]}")
+        trust = i18n.t("trust_note", self.info.get("lang") or "en", business=self.info["name"])
+        inv = self.paypal.create_invoice(name, email, clean, (_clean(note, 500) + "\n\n" + trust).strip(), reference=f"dp-{_tag(self.ws)}")
+        prev_max = self.store.one("SELECT COALESCE(MAX(total),0) m FROM invoices WHERE ws=? AND status NOT IN ('DRAFT','CANCELLED')", (self.ws,))["m"]
         due_date = (self.today() + timedelta(days=max(0, min(int(due_in_days or 7), 90)))).isoformat()
         now = time.time()
         self.store.x("INSERT INTO invoices(id,ws,contact,status,total,due,currency,due_date,summary,created_at,updated_at,refreshed_at) "
@@ -206,7 +217,12 @@ class Business:
                       json.dumps({"items": clean, "items_key": json.dumps(clean, sort_keys=True), "email": email}, ensure_ascii=False), now, now, 0))
         self.save_contact(name, email, "customer")
         self.log("invoice_draft", f"Draft invoice for {name}: {i18n.fmt_money(total, self.currency)}", "invoice_draft", {"name": name, "amount": [total, self.currency]}, invoice_id=inv["id"])
-        return self.refresh_invoice(inv["id"])
+        view = self.refresh_invoice(inv["id"])
+        if total >= HOLD_RISK_MIN and prev_max and total > HOLD_RISK_FACTOR * prev_max:
+            view["risk_note"] = (f"This invoice is {total / prev_max:.1f}x the largest one this business has sent. PayPal says sudden changes "
+                                 "in selling activity can lead it to hold funds for review: tell the owner briefly and suggest keeping "
+                                 "proof of delivery. Do not claim we can prevent a hold.")
+        return view
 
     def _owned(self, invoice_id: str) -> dict:
         row = self.store.one("SELECT * FROM invoices WHERE id=? AND ws=?", (str(invoice_id), self.ws))
@@ -430,7 +446,7 @@ class Business:
         if self.store.x("UPDATE bills SET status='processing' WHERE id=? AND status='pending'", (b["id"],)).rowcount != 1:
             raise ValidationError("That bill is already paid or its payment is in progress.")  # someone else claimed it first
         attempt = self.store.one("SELECT COUNT(*) n FROM payouts WHERE bill_id=? AND ws=?", (b["id"], self.ws))["n"] + 1
-        sender_batch_id = f"dp{self.ws[:10]}b{b['id']}a{attempt}"
+        sender_batch_id = f"dp{_tag(self.ws)}b{b['id']}a{attempt}"
         self.store.x("INSERT INTO payouts(sender_batch_id,ws,bill_id,status,amount,created_at) VALUES(?,?,?,?,?,?)",
                      (sender_batch_id, self.ws, b["id"], "starting", b["amount"], time.time()))
         try:
@@ -541,6 +557,14 @@ class Business:
                 self.store.x("UPDATE payouts SET status=? WHERE sender_batch_id=?", ("unclaimed" if unclaimed else "done", p["sender_batch_id"]))
             elif batch_status:
                 self.store.x("UPDATE payouts SET status=? WHERE sender_batch_id=?", (batch_status, p["sender_batch_id"]))
+        # Unclaimed for days: the email is probably wrong or the person has no PayPal account. PayPal returns it after 30 days.
+        for p in self.store.q("SELECT p.*, b.payee, b.payee_email, b.amount AS bill_amount, b.currency FROM payouts p JOIN bills b ON b.id=p.bill_id "
+                              "WHERE p.ws=? AND p.status='unclaimed' AND p.followed_up=0 AND p.created_at<?",
+                              (self.ws, now - UNCLAIMED_FOLLOW_UP_DAYS * 86400)):
+            days = int((now - p["created_at"]) // 86400)
+            self.store.alert(self.ws, "a_payout_unclaimed_follow", payee=p["payee"], email=p["payee_email"], days=days,
+                             amount=[p["bill_amount"], p["currency"]])
+            self.store.x("UPDATE payouts SET followed_up=1 WHERE sender_batch_id=?", (p["sender_batch_id"],))
         return settled
 
     # --- money in and out ---------------------------------------------------------------
@@ -561,6 +585,8 @@ class Business:
             raise ValidationError("The amount must be greater than 0.")
         if not _clean(description, 200):
             raise ValidationError("Describe the sale or expense.")
+        if self.store.one("SELECT COUNT(*) n FROM movements WHERE ws=?", (self.ws,))["n"] >= MAX_MOVEMENTS:
+            raise ValidationError("This demo business reached its limit of recorded movements.")
         self._movement(kind, description, amount, method if method in METHODS else "OTHER", category or ("sales" if kind == "income" else "general"), contact)
         self.log("movement", f"{'Income' if kind == 'income' else 'Expense'}: {_clean(description, 80)} {i18n.fmt_money(amount, self.currency)}", kind, {"desc": _clean(description, 80), "amount": [amount, self.currency]})
         return {"ok": True, "kind": kind, "amount": amount, "currency": self.currency, "description": _clean(description, 200)}
@@ -680,12 +706,17 @@ class Business:
             elif m["contact"]:
                 by_customer[m["contact"]] = by_customer.get(m["contact"], 0) + m["amount"]
         receivable = round(sum(i["due"] for i in open_inv), 2)
+        aging = {"not_due": 0.0, "d1_30": 0.0, "d31_60": 0.0, "d61_plus": 0.0}  # how late the money owed is
+        for i in open_inv:
+            late = (today - date.fromisoformat(i["due_date"])).days if i["due_date"] else 0
+            key = "not_due" if late <= 0 else "d1_30" if late <= 30 else "d31_60" if late <= 60 else "d61_plus"
+            aging[key] = round(aging[key] + i["due"], 2)
         due_7 = round(sum(b["amount"] for b in bills if b["due_date"] <= week), 2)
         due_30 = round(sum(b["amount"] for b in bills if b["due_date"] <= month), 2)
         return {
             "period": period, "currency": self.currency, "today": today.isoformat(),
             "income": income, "expense": expense, "net": round(income - expense, 2),
-            "receivable": receivable, "open_invoices": len(open_inv),
+            "receivable": receivable, "open_invoices": len(open_inv), "receivable_aging": aging,
             "overdue_invoices": [{"id": i["id"], "customer": i["customer"], "due": i["due"], "due_date": i["due_date"]} for i in overdue],
             "bills_overdue": [{"id": b["id"], "payee": b["payee"], "amount": b["amount"], "due_date": b["due_date"]} for b in bills if b["overdue"]],
             "bills_next_7_days": due_7, "bills_next_30_days": due_30,

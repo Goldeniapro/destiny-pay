@@ -112,8 +112,36 @@ def test_webhook_marks_invoice_paid(api, monkeypatch):
     monkeypatch.setattr(main, "DEMO_MODE", False)
     monkeypatch.setattr(main, "WEBHOOK_ID", "WH")
     monkeypatch.setattr(main.paypal, "verify_webhook", lambda h, e, w: True, raising=False)
-    r = client.post("/api/paypal/webhook", json={"event_type": "INVOICING.INVOICE.PAID", "resource": {"invoice": {"id": inv["id"]}}})
+    cert = {"paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-1"}
+    event = {"id": "WH-EVT-1", "event_type": "INVOICING.INVOICE.PAID", "resource": {"invoice": {"id": inv["id"]}}}
+    r = client.post("/api/paypal/webhook", json=event, headers=cert)
     assert r.status_code == 200 and biz.invoice_view(inv["id"])["status"] == "PAID"
+    again = client.post("/api/paypal/webhook", json=event, headers=cert)  # PayPal retries: handled once
+    assert again.status_code == 200 and again.json().get("duplicate") is True
+    forged = client.post("/api/paypal/webhook", json={**event, "id": "WH-EVT-2"}, headers={"paypal-cert-url": "https://evil.example/cert"})
+    assert forged.status_code == 400  # never even reaches PayPal's verify API
+
+
+def test_security_headers_body_cap_and_no_docs(api):
+    client, _ = api
+    r = client.get("/")
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"] and r.headers["x-content-type-options"] == "nosniff"
+    assert client.get("/docs").status_code == 404 and client.get("/openapi.json").status_code == 404
+    big = client.post("/api/chat", content=b"{" + b" " * (70 * 1024) + b"}", headers={"content-type": "application/json"})
+    assert big.status_code == 413
+
+
+def test_forwarded_for_uses_the_proxy_hop(api):
+    from starlette.requests import Request as R
+    req = R({"type": "http", "headers": [(b"x-forwarded-for", b"1.2.3.4, 9.9.9.9")], "client": ("10.0.0.1", 1)})
+    assert main.client_ip(req) == "9.9.9.9"  # the client can only forge what comes before the proxy's own hop
+
+
+def test_daily_quota_per_ip(api, monkeypatch):
+    client, _ = api
+    monkeypatch.setitem(main.quotas, "workspace_day", main.DailyQuota(2))
+    codes = [client.post("/api/workspace", json={"lang": "es", "sample": False}, headers={"x-forwarded-for": f"7.7.7.{i}, 5.5.5.5"}).status_code for i in range(3)]
+    assert codes == [200, 200, 429]  # rotating the forged part of the header does not help
 
 
 def test_speech_endpoint_streams_only_registered_text(api, monkeypatch):

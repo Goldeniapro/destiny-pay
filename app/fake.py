@@ -21,6 +21,7 @@ _DEMO_QR = base64.b64encode(
 class FakePayPal:
     currency = "USD"
     base_url = "demo"
+    offline = True  # sample invoices may be seeded only here, never on a real PayPal account
 
     def __init__(self, store=None) -> None:
         self.store = store

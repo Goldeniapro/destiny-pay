@@ -21,6 +21,10 @@ T: dict[str, dict[str, str]] = {
     "c_cancel_invoice": {"es": 'Listo, cancelé la factura de {name} por {total}.', "en": "Done, I cancelled {name}'s {total} invoice.", "pt": 'Pronto, cancelei a fatura de {name} de {total}.'},
     "c_pay_bill": {"es": 'Listo, le pagué {amount} a {payee} con PayPal.', "en": 'Done, I paid {payee} {amount} with PayPal.', "pt": 'Pronto, paguei {amount} a {payee} com PayPal.'},
     "c_pay_bill_pending": {"es": 'Listo, envié el pago de {amount} a {payee} con PayPal. Te aviso cuando PayPal lo confirme.', "en": "Done, I sent the {amount} payment to {payee} with PayPal. I'll tell you when PayPal confirms it.", "pt": 'Pronto, enviei o pagamento de {amount} a {payee} com PayPal. Aviso quando o PayPal confirmar.'},
+    "rb_send_invoice": {"es": 'Para confirmar: factura de {total} para {name}.', "en": 'To confirm: a {total} invoice for {name}.', "pt": 'Para confirmar: fatura de {total} para {name}.'},
+    "rb_cancel_invoice": {"es": 'Para confirmar: cancelar la factura de {total} de {name}.', "en": "To confirm: cancel {name}'s {total} invoice.", "pt": 'Para confirmar: cancelar a fatura de {total} de {name}.'},
+    "rb_pay_bill": {"es": 'Para confirmar: pagar {total} a {name}.', "en": 'To confirm: pay {name} {total}.', "pt": 'Para confirmar: pagar {total} a {name}.'},
+    "multi_confirm": {"es": 'Preparé {n} operaciones. Por seguridad, confírmalas una por una con los botones de la pantalla.', "en": 'I prepared {n} operations. For safety, confirm them one by one with the buttons on screen.', "pt": 'Preparei {n} operações. Por segurança, confirme uma por uma com os botões da tela.'},
     "c_denied": {"es": 'Entendido, no lo hago.', "en": "Understood, I won't do it.", "pt": 'Entendido, não vou fazer.'},
     "c_failed": {"es": 'No pude hacerlo: {error}', "en": "I couldn't do it: {error}", "pt": 'Não consegui fazer: {error}'},
     "c_gone": {"es": 'Esa confirmación ya no está vigente. Pídemelo de nuevo, por favor.', "en": 'That confirmation is no longer valid. Please ask me again.', "pt": 'Essa confirmação não vale mais. Peça de novo, por favor.'},
@@ -32,6 +36,8 @@ T: dict[str, dict[str, str]] = {
     "a_payout_unclaimed": {"es": 'El pago a {payee} salió, pero esa persona aún no lo reclama en PayPal.', "en": "The payment to {payee} went out, but they haven't claimed it in PayPal yet.", "pt": 'O pagamento a {payee} saiu, mas a pessoa ainda não o resgatou no PayPal.'},
     "a_payout_failed": {"es": 'El pago a {payee} no se completó en PayPal. Lo dejé otra vez como pendiente.', "en": "The payment to {payee} didn't go through in PayPal. I marked the bill as pending again.", "pt": 'O pagamento a {payee} não foi concluído no PayPal. Deixei a conta pendente de novo.'},
     "a_payout_unknown": {"es": 'No pude confirmar si el pago a {payee} salió. Revísalo en PayPal antes de pagarle de otra forma.', "en": "I couldn't confirm whether the payment to {payee} went out. Check PayPal before paying them another way.", "pt": 'Não consegui confirmar se o pagamento a {payee} saiu. Verifique no PayPal antes de pagar de outra forma.'},
+    "a_payout_unclaimed_follow": {"es": '{payee} lleva {days} días sin reclamar el pago de {amount}. Confirma que su correo sea {email}: si nadie lo reclama en 30 días, PayPal te lo devuelve.', "en": "{payee} hasn't claimed the {amount} payment for {days} days. Check that their email is {email}: if nobody claims it within 30 days, PayPal returns it to you.", "pt": '{payee} está há {days} dias sem resgatar o pagamento de {amount}. Confirme se o e-mail é {email}: se ninguém resgatar em 30 dias, o PayPal devolve para você.'},
+    "trust_note": {"es": 'Para verificar este cobro, inicia sesión en PayPal directamente. {business} nunca te pedirá llamar a un número de teléfono para pagar.', "en": 'To verify this request, sign in to PayPal directly. {business} will never ask you to call a phone number to pay.', "pt": 'Para verificar esta cobrança, entre no PayPal diretamente. {business} nunca vai pedir que você ligue para um número de telefone para pagar.'},
     "a_bill_due": {"es": 'Mañana vence el pago a {payee} por {amount}.', "en": 'The {amount} payment to {payee} is due tomorrow.', "pt": 'Amanhã vence o pagamento a {payee} de {amount}.'},
     "b_morning": {"es": 'Buenos días', "en": 'Good morning', "pt": 'Bom dia'},
     "b_afternoon": {"es": 'Buenas tardes', "en": 'Good afternoon', "pt": 'Boa tarde'},
@@ -39,7 +45,11 @@ T: dict[str, dict[str, str]] = {
     "b_receivable": {"es": 'Te deben {amount} en {n} cobros pendientes.', "en": "You're owed {amount} across {n} open invoices.", "pt": 'Te devem {amount} em {n} cobranças pendentes.'},
     "b_overdue": {"es": '{n} ya están vencidos.', "en": '{n} are overdue.', "pt": '{n} já estão vencidas.'},
     "b_bills": {"es": 'En los próximos 7 días tienes que pagar {amount}; lo primero es {payee} el {date}.', "en": 'In the next 7 days you have {amount} to pay; first is {payee} on {date}.', "pt": 'Nos próximos 7 dias você tem {amount} a pagar; o primeiro é {payee} em {date}.'},
-    "b_bills_overdue": {"es": 'Tienes {n} pago vencido: {payee} por {amount}.', "en": 'You have {n} overdue bill: {payee}, {amount}.', "pt": 'Você tem {n} pagamento vencido: {payee}, {amount}.'},
+    "b_bills_overdue": {"es": 'Tienes {n} pagos vencidos; el primero es {payee} por {amount}.', "en": 'You have {n} overdue bills; the first is {payee}, {amount}.', "pt": 'Você tem {n} pagamentos vencidos; o primeiro é {payee}, {amount}.'},
+    "b_bills_overdue_one": {"es": 'Tienes 1 pago vencido: {payee} por {amount}.', "en": 'You have 1 overdue bill: {payee}, {amount}.', "pt": 'Você tem 1 pagamento vencido: {payee}, {amount}.'},
+    "b_receivable_one": {"es": 'Te deben {amount} en 1 cobro pendiente.', "en": "You're owed {amount} on 1 open invoice.", "pt": 'Te devem {amount} em 1 cobrança pendente.'},
+    "b_overdue_one": {"es": '1 ya está vencido.', "en": '1 is overdue.', "pt": '1 já está vencida.'},
+    "b_reminders_one": {"es": 'Hoy tienes 1 recordatorio.', "en": 'You have 1 reminder today.', "pt": 'Hoje você tem 1 lembrete.'},
     "b_reminders": {"es": 'Hoy tienes {n} recordatorios.', "en": 'You have {n} reminders today.', "pt": 'Hoje você tem {n} lembretes.'},
     "b_month": {"es": 'Este mes llevas {income} de ingresos y {expense} de gastos.', "en": "This month you've had {income} in income and {expense} in expenses.", "pt": 'Este mês você teve {income} de receitas e {expense} de despesas.'},
     "b_clear": {"es": 'Todo está al día. ¿A quién le cobramos?', "en": 'Everything is up to date. Who should we bill?', "pt": 'Está tudo em dia. Quem vamos cobrar?'},
@@ -84,6 +94,8 @@ def log_text(key: str, lang: str, params: dict, fallback: str) -> str:
 
 
 def t(key: str, lang: str, **params) -> str:
+    if params.get("n") == 1 and key + "_one" in T:  # singular wording ("1 pago vencido", not "1 pagos vencidos")
+        key += "_one"
     text = T[key].get(lang) or T[key]["en"]
     return text.format(**params) if params else text
 

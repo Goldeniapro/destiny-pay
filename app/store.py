@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS confirmations(
   created_at REAL NOT NULL, resolved_at REAL);
 CREATE TABLE IF NOT EXISTS payouts(
   sender_batch_id TEXT PRIMARY KEY, ws TEXT NOT NULL, bill_id INTEGER NOT NULL, status TEXT NOT NULL,
-  batch_id TEXT NOT NULL DEFAULT '', amount REAL NOT NULL DEFAULT 0, checked_at REAL NOT NULL DEFAULT 0, created_at REAL NOT NULL);
+  batch_id TEXT NOT NULL DEFAULT '', amount REAL NOT NULL DEFAULT 0, checked_at REAL NOT NULL DEFAULT 0, created_at REAL NOT NULL,
+  followed_up INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS fake_paypal(id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS invoices_ws ON invoices(ws);
 CREATE INDEX IF NOT EXISTS bills_ws ON bills(ws);
@@ -80,7 +81,7 @@ class Store:
             self._db.execute("PRAGMA busy_timeout=5000")
             self._db.executescript(SCHEMA)
             for table, column, decl in (("bills", "anchor_day", "INTEGER NOT NULL DEFAULT 0"), ("payouts", "amount", "REAL NOT NULL DEFAULT 0"),
-                                        ("payouts", "checked_at", "REAL NOT NULL DEFAULT 0")):
+                                        ("payouts", "checked_at", "REAL NOT NULL DEFAULT 0"), ("payouts", "followed_up", "INTEGER NOT NULL DEFAULT 0")):
                 cols = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})").fetchall()}
                 if column not in cols:  # older database: add the column in place
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
@@ -115,6 +116,28 @@ class Store:
 
     def count_recent_workspaces(self, within: float) -> int:
         return self.one("SELECT COUNT(*) n FROM workspaces WHERE created_at>?", (time.time() - within,))["n"]
+
+    def purge(self, idle_seconds: float, keep_activity: int = 300, keep_alerts: int = 200) -> int:
+        """Delete businesses nobody opened for a while (nothing pending on PayPal or in reminders) and trim logs.
+
+        A public demo creates a business per visitor: without this the disk fills up."""
+        cutoff, now = time.time() - idle_seconds, time.time()
+        stale = [r["id"] for r in self.q(
+            "SELECT id FROM workspaces w WHERE last_seen<? "
+            "AND NOT EXISTS(SELECT 1 FROM payouts p WHERE p.ws=w.id AND p.status NOT IN ('done','failed')) "
+            "AND NOT EXISTS(SELECT 1 FROM reminders r WHERE r.ws=w.id AND r.status='pending' AND r.due_at>?) LIMIT 500", (cutoff, now))]
+        with self._lock:
+            for ws in stale:
+                self._db.execute("DELETE FROM fake_paypal WHERE id IN (SELECT id FROM invoices WHERE ws=?)", (ws,))
+                for table in ("contacts", "invoices", "bills", "movements", "reminders", "facts", "activity", "alerts", "confirmations", "payouts"):
+                    self._db.execute(f"DELETE FROM {table} WHERE ws=?", (ws,))
+                self._db.execute("DELETE FROM workspaces WHERE id=?", (ws,))
+            for ws in [r["ws"] for r in self.q("SELECT ws FROM activity GROUP BY ws HAVING COUNT(*)>?", (keep_activity,))]:
+                self._db.execute("DELETE FROM activity WHERE ws=? AND id NOT IN (SELECT id FROM activity WHERE ws=? ORDER BY id DESC LIMIT ?)", (ws, ws, keep_activity))
+            for ws in [r["ws"] for r in self.q("SELECT ws FROM alerts GROUP BY ws HAVING COUNT(*)>?", (keep_alerts,))]:
+                self._db.execute("DELETE FROM alerts WHERE ws=? AND id NOT IN (SELECT id FROM alerts WHERE ws=? ORDER BY id DESC LIMIT ?)", (ws, ws, keep_alerts))
+            self._db.execute("DELETE FROM confirmations WHERE status!='pending' AND created_at<?", (now - 7 * 86400,))
+        return len(stale)
 
     # --- activity and alerts -------------------------------------------------
     def log(self, ws: str, kind: str, text: str, data: dict | None = None) -> None:

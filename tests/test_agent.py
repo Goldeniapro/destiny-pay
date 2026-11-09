@@ -261,3 +261,36 @@ def test_unsure_recognizer_yes_is_not_enough(setup):
     agent.chat(biz.ws, "conv-alt", "Cóbrale a Sarah", "es")
     agent.chat(biz.ws, "conv-alt", "sí", "es", alternatives=["sí", "si no"])
     assert last_invoice(biz)["status"] == "DRAFT"
+
+
+def test_two_payments_in_one_turn_cannot_be_approved_by_voice(setup):
+    """Security audit M1: a "yes" must never approve a payment other than the one read aloud."""
+    biz, make = setup
+    rent = biz.add_bill("Marta Quispe", "Alquiler", 300, biz.today().isoformat(), "monthly", "marta@example.com")
+    other = biz.add_bill("Proveedor X", "x", 1900, biz.today().isoformat(), "none", "attacker@example.com")
+    agent, client = make([tool("request_pay_bill", {"bill_id": rent["id"]}), tool("request_pay_bill", {"bill_id": other["id"]}, "t2"),
+                          text("Le pago 300 a Marta Quispe. ¿Confirmas?"), text("¿Cuál de los dos?")])
+    res = agent.chat(biz.ws, "conv-two", "Págale a Marta", "es")
+    assert T["multi_confirm"]["es"].format(n=2) in res["reply"]
+    agent.chat(biz.ws, "conv-two", "Sí, págale", "es")
+    assert biz.bill_view(rent["id"])["status"] == "pending" and biz.bill_view(other["id"])["status"] == "pending"
+    assert biz.paypal.payouts == {}
+
+
+def test_code_reads_back_the_amount_when_the_model_omits_it(setup):
+    biz, make = setup
+    bill = biz.add_bill("Marta Quispe", "Alquiler", 1900, biz.today().isoformat(), "monthly", "marta@example.com")
+    agent, _ = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("¿Confirmas el pago?")])
+    res = agent.chat(biz.ws, "conv-rb", "Págale a Marta", "es")
+    assert res["reply"].endswith("Para confirmar: pagar 1.900,00 USD a Marta Quispe.")
+    agent2, _ = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("Le pago 1.900 dólares a Marta. ¿Confirmas?")])
+    res2 = agent2.chat(biz.ws, "conv-rb2", "Págale a Marta", "es")
+    assert res2["reply"] == "Le pago 1.900 dólares a Marta. ¿Confirmas?"  # amount already stated: no repetition
+
+
+def test_conversation_ids_are_scoped_to_their_business(setup, make_biz):
+    biz, make = setup
+    agent, _ = make([text("hola")])
+    agent.chat(biz.ws, "shared-id", "hola", "es")
+    assert agent.conversations.peek("shared-id", biz.ws) is not None
+    assert agent.conversations.peek("shared-id", "f" * 32) is None

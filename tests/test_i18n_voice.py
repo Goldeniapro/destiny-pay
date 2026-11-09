@@ -101,3 +101,9 @@ def test_each_language_can_have_its_own_voice(monkeypatch):
     b"".join(v.stream(v.register("Hello", "en")))
     assert used == ["voz-es", "voice-en"]
     assert v.register("Olá", "pt") is None  # no Portuguese voice and no fallback: the browser speaks it
+
+
+def test_singular_and_plural_wording():
+    from app.i18n import t
+    assert t("b_overdue", "es", n=1) == "1 ya está vencido." and t("b_overdue", "es", n=3) == "3 ya están vencidos."
+    assert t("b_bills_overdue", "pt", n=2, payee="X", amount="1 USD").startswith("Você tem 2 pagamentos vencidos")

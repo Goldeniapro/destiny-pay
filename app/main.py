@@ -7,12 +7,13 @@ import os
 import secrets
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -84,9 +85,15 @@ def scheduler_tick() -> None:
 
 
 def _scheduler_loop(stop: threading.Event) -> None:
+    last_purge = 0.0
     while not stop.wait(15):
         try:
             scheduler_tick()
+            if time.time() - last_purge > 3600:  # hourly: forget businesses idle for two days, trim logs
+                last_purge = time.time()
+                n = store.purge(_env_int("DP_IDLE_PURGE_HOURS", 48) * 3600)
+                if n:
+                    log.info("purged %d idle businesses", n)
         except Exception:
             log.exception("scheduler tick failed")
 
@@ -100,8 +107,56 @@ async def lifespan(_app: FastAPI):
     stop.set()
 
 
-app = FastAPI(title="Destiny Pay", lifespan=lifespan)
+app = FastAPI(title="Destiny Pay", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
+       "media-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+SECURITY_HEADERS = [
+    (b"content-security-policy", CSP.encode()), (b"x-content-type-options", b"nosniff"), (b"referrer-policy", b"no-referrer"),
+    (b"x-frame-options", b"DENY"), (b"permissions-policy", b"microphone=(self), camera=(), geolocation=()"),
+    (b"cross-origin-opener-policy", b"same-origin"),
+]
+
+
+class GuardMiddleware:
+    """Security headers on every response, and request bodies capped before anything reads them."""
+
+    def __init__(self, app, default_limit: int = 64 * 1024, upload_limit: int = 9 * 1024 * 1024) -> None:
+        self.app, self.default_limit, self.upload_limit = app, default_limit, upload_limit
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        cap = self.upload_limit if scope["path"] == "/api/transcribe" else self.default_limit
+        declared = dict(scope.get("headers") or []).get(b"content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) > cap):
+            return await self._reject(send)
+        seen = 0
+
+        async def limited_receive():
+            nonlocal seen
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > cap:
+                    raise HTTPException(413, "Request too large")
+            return message
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                message["headers"] = list(message.get("headers") or []) + SECURITY_HEADERS
+            await send(message)
+
+        await self.app(scope, limited_receive, send_with_headers)
+
+    @staticmethod
+    async def _reject(send):
+        await send({"type": "http.response.start", "status": 413, "headers": [(b"content-type", b"application/json"), *SECURITY_HEADERS]})
+        await send({"type": "http.response.body", "body": b'{"detail":"Request too large"}'})
+
+
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(GuardMiddleware)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -127,9 +182,34 @@ class RateLimiter:
             return True
 
 
+class DailyQuota:
+    """Per-key daily counter (per visitor IP): no single visitor can use up what the whole demo shares."""
+
+    def __init__(self, per_day: int) -> None:
+        self.per_day, self.day, self.used = per_day, time.strftime("%Y-%m-%d"), defaultdict(int)
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        with self._lock:
+            today = time.strftime("%Y-%m-%d")
+            if today != self.day:
+                self.day, self.used = today, defaultdict(int)
+            if self.used[key] >= self.per_day:
+                return False
+            self.used[key] += 1
+            return True
+
+
 def _env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, str(default)))
 
+
+quotas = {
+    "workspace_day": DailyQuota(_env_int("DP_WORKSPACES_PER_IP_DAY", 20)),
+    "chat_day": DailyQuota(_env_int("DP_CHATS_PER_IP_DAY", 150)),
+    "transcribe_day": DailyQuota(_env_int("DP_TRANSCRIBES_PER_IP_DAY", 150)),
+    "money_day": DailyQuota(_env_int("DP_MONEY_ACTIONS_PER_IP_DAY", 20)),
+}
 
 limits = {
     "chat": RateLimiter(_env_int("DP_CHAT_PER_MINUTE", 15)),
@@ -141,18 +221,24 @@ limits = {
     "transcribe": RateLimiter(_env_int("DP_TRANSCRIBE_PER_MINUTE", 15)),
     "transcribe_all": RateLimiter(_env_int("DP_TRANSCRIBE_GLOBAL_PER_MINUTE", 60)),
     "chat_ws": RateLimiter(_env_int("DP_CHAT_PER_WORKSPACE_PER_MINUTE", 15)),
+    "state_ws": RateLimiter(_env_int("DP_STATE_PER_WORKSPACE_PER_MINUTE", 60)),
+    "webhook_all": RateLimiter(_env_int("DP_WEBHOOKS_PER_MINUTE", 120)),
 }
 
 
 def client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    return fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "unknown")
+    # Render's proxy appends the address it saw as the LAST hop; anything before it was sent by the client and can be forged.
+    hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+    return hops[-1] if hops else (request.client.host if request.client else "unknown")
 
 
 def limit(request: Request, *names: str, ws: str = "") -> None:
-    # The forwarded IP can be spoofed, so every per-IP limit is backed by a per-business or server-wide one.
     ip = client_ip(request)
     for name in names:
+        if name in quotas:
+            if not quotas[name].allow(ip):
+                raise HTTPException(429, "Daily demo limit reached for this connection. Please come back tomorrow.")
+            continue
         key = "all" if name.endswith("_all") else ws if name.endswith("_ws") else ip
         if not limits[name].allow(key):
             raise HTTPException(429, "Too many requests. Wait a minute and try again.")
@@ -204,7 +290,7 @@ class WorkspaceIn(BaseModel):
 
 @app.post("/api/workspace")
 def create_workspace(body: WorkspaceIn, request: Request):
-    limit(request, "workspace", "workspace_all")
+    limit(request, "workspace", "workspace_all", "workspace_day")
     lang = lang_of(body.lang)
     from zoneinfo import ZoneInfo
     try:
@@ -221,7 +307,7 @@ def create_workspace(body: WorkspaceIn, request: Request):
 
 @app.get("/api/state")
 def state(request: Request, ws: str = Query(**WS_ID), lang: str = "es", since: int = 0):
-    limit(request, "state")
+    limit(request, "state", "state_ws", ws=ws)
     biz = open_business(ws)
     lang = lang_of(lang)
     alerts = []
@@ -281,14 +367,17 @@ class ChatIn(BaseModel):
 
 @app.post("/api/chat")
 def chat(body: ChatIn, request: Request):
-    limit(request, "chat", "chat_all", "chat_ws", ws=body.workspace_id)
+    limit(request, "chat", "chat_all", "chat_ws", "chat_day", ws=body.workspace_id)
     open_business(body.workspace_id)
     text = body.message.strip()
     if not text:
         raise HTTPException(400, "Empty message")
+    pending = agent.conversations.peek(body.conversation_id, body.workspace_id)
+    if pending is not None and pending.awaiting:
+        limit(request, "money_day")  # this message may approve a payment by voice
     alternatives = [a[:300] for a in body.alternatives]
     res = agent.chat(body.workspace_id, body.conversation_id, text, lang_of(body.lang), alternatives)
-    conv = agent.conversations.peek(body.conversation_id)
+    conv = agent.conversations.peek(body.conversation_id, body.workspace_id)
     res["speech_id"] = voice.register(res.get("reply", ""), conv.lang if conv else lang_of(body.lang))
     return res
 
@@ -303,7 +392,7 @@ class ConfirmIn(BaseModel):
 
 @app.post("/api/confirm")
 def confirm(body: ConfirmIn, request: Request):
-    limit(request, "chat", "chat_ws", ws=body.workspace_id)
+    limit(request, "chat", "chat_ws", *(["money_day"] if body.approve else []), ws=body.workspace_id)
     open_business(body.workspace_id)
     res = agent.confirm(body.workspace_id, body.conversation_id, body.confirmation_id, body.approve, lang_of(body.lang))
     res["speech_id"] = voice.register(res["reply"], lang_of(body.lang))
@@ -319,37 +408,67 @@ def speech(speech_id: str, request: Request):
     try:
         audio = voice.stream(speech_id)
     except VoiceError as e:
-        raise HTTPException(404 if "unknown" in str(e) else 503, str(e))
+        raise HTTPException(404, "Not found") if "unknown" in str(e) else HTTPException(503, "Voice unavailable")
     return StreamingResponse(audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/transcribe")
-async def transcribe(request: Request, workspace_id: str = Form(**WS_ID), lang: str = Form("es"), audio: UploadFile = File(...)):
-    limit(request, "transcribe", "transcribe_all")
+def transcribe(request: Request, workspace_id: str = Form(**WS_ID), lang: str = Form("es"), audio: UploadFile = File(...)):
+    # Plain def: the upstream call runs in the thread pool and never blocks the server's event loop.
+    limit(request, "transcribe", "transcribe_all", "transcribe_day")
     open_business(workspace_id)
-    data = await audio.read(8 * 1024 * 1024 + 1)
+    data = audio.file.read(8 * 1024 * 1024 + 1)
     try:
         text = voice.transcribe(data, audio.filename or "speech.webm", audio.content_type or "audio/webm", lang_of(lang))
     except VoiceError as e:
-        raise HTTPException(503, str(e))
+        log.warning("transcription failed: %s", e)
+        raise HTTPException(503, "Transcription unavailable")
     return {"text": text}
 
 
 # --- PayPal webhooks ------------------------------------------------------------------------------
+CERT_HOSTS = ("https://api.paypal.com/", "https://api.sandbox.paypal.com/", "https://api-m.paypal.com/", "https://api-m.sandbox.paypal.com/")
+_seen_events: OrderedDict[str, float] = OrderedDict()
+_seen_lock = threading.Lock()
+
+
+def _first_time(event_id: str) -> bool:
+    """PayPal retries deliveries for days: handle each event id once."""
+    with _seen_lock:
+        if not event_id or event_id in _seen_events:
+            return not event_id
+        _seen_events[event_id] = time.time()
+        while len(_seen_events) > 5000:
+            _seen_events.popitem(last=False)
+        return True
+
+
 @app.post("/api/paypal/webhook")
 async def paypal_webhook(request: Request):
+    if DEMO_MODE or not WEBHOOK_ID:
+        raise HTTPException(404, "Webhooks are not configured")
+    limit(request, "webhook_all")
+    if not str(request.headers.get("paypal-cert-url", "")).startswith(CERT_HOSTS):
+        raise HTTPException(400, "Signature verification failed")
     try:
         event = await request.json()
     except Exception:
         raise HTTPException(400, "Invalid JSON")
-    if DEMO_MODE or not WEBHOOK_ID:
-        raise HTTPException(404, "Webhooks are not configured")
+    if not isinstance(event, dict):
+        raise HTTPException(400, "Invalid JSON")
+    # PayPal calls are blocking: run them in the thread pool so the rest of the app keeps answering.
+    return await run_in_threadpool(_handle_webhook, dict(request.headers), event)
+
+
+def _handle_webhook(headers: dict, event: dict) -> dict:
     try:
-        genuine = paypal.verify_webhook(dict(request.headers), event, WEBHOOK_ID)
+        genuine = paypal.verify_webhook(headers, event, WEBHOOK_ID)
     except PayPalError:
         genuine = False
     if not genuine:
         raise HTTPException(400, "Signature verification failed")
+    if not _first_time(str(event.get("id", ""))):
+        return {"ok": True, "duplicate": True}
     kind = str(event.get("event_type", ""))
     resource = event.get("resource") or {}
     if kind.startswith("INVOICING.INVOICE."):

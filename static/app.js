@@ -51,6 +51,26 @@
     if (!r.ok) { const e = new Error("http " + r.status); e.status = r.status; throw e; }
     return r.json();
   }
+  // line icons (static paths only, built with DOM APIs)
+  const ICONS = {
+    check: ["M20 6 9 17l-5-5"], clock: ["M12 7v5l3 2", "C12 12 9"], alert: ["M12 8v5", "M12 16.5v.01", "C12 12 9"],
+    lock: ["R4 11 16 10 2", "M8 11V7a4 4 0 0 1 8 0v4"], play: ["M11 5 6 9H2v6h4l5 4z", "M15.5 8.5a5 5 0 0 1 0 7"],
+    inbox: ["M3 13h5l2 3h4l2-3h5", "M5 5h14l2 8v6H3v-6z"], calendar: ["R3 5 18 16 3", "M8 3v4M16 3v4M3 10h18"],
+    up: ["M3 17l6-6 4 4 8-8", "M15 7h6v6"], down: ["M3 7l6 6 4-4 8 8", "M15 17h6v-6"], spark: ["M3 20h18", "M5 16l4-5 4 3 6-8"],
+    mail: ["R3 5 18 14 2", "m3 7 9 6 9-6"], bell: ["M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8", "M10 20a2 2 0 0 0 4 0"],
+  };
+  const SVGNS = "http://www.w3.org/2000/svg";
+  function icon(name) {
+    const svg = document.createElementNS(SVGNS, "svg"); svg.setAttribute("class", "i"); svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true");
+    for (const d of ICONS[name] || []) {
+      let el;
+      if (d[0] === "C") { const [cx, cy, r] = d.slice(1).trim().split(" "); el = document.createElementNS(SVGNS, "circle"); el.setAttribute("cx", cx); el.setAttribute("cy", cy); el.setAttribute("r", r); }
+      else if (d[0] === "R") { const [x, y, w, h, rx] = d.slice(1).trim().split(" "); el = document.createElementNS(SVGNS, "rect"); el.setAttribute("x", x); el.setAttribute("y", y); el.setAttribute("width", w); el.setAttribute("height", h); el.setAttribute("rx", rx); }
+      else { el = document.createElementNS(SVGNS, "path"); el.setAttribute("d", d); }
+      svg.appendChild(el);
+    }
+    return svg;
+  }
   const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
   // ---------- UI text ----------
@@ -83,8 +103,9 @@
 
   function applyStatus() {
     if (!status) return;
-    $("mode").textContent = status.demo_mode ? t("mode_demo") : (status.paypal_env === "live" ? t("mode_live") : t("mode_sandbox"));
-    $("voice-badge").hidden = !status.voice.tts; $("voice-badge").textContent = "🎧 " + t("voice_badge");
+    const dot = document.createElement("span"); dot.className = "dot";
+    $("mode").replaceChildren(dot, status.demo_mode ? t("mode_demo") : (status.paypal_env === "live" ? t("mode_live") : t("mode_sandbox")));
+    $("voice-badge").hidden = !status.voice.tts; $("voice-badge").textContent = t("voice_badge");
     const notice = !status.ai_ready ? t("ai_off") : status.demo_mode ? t("demo_note") : "";
     $("notice").hidden = !notice; $("notice").textContent = notice;
   }
@@ -109,7 +130,7 @@
     const label = t("actions")[a.tool] || a.tool;
     const waiting = a.result && a.result.status === "awaiting_owner_confirmation";
     d.className = "act" + (a.error ? " err" : waiting ? " wait" : "");
-    d.textContent = a.error ? `⚠ ${label}: ${a.error}` : `${waiting ? "⏳" : "✓"} ${label}`;
+    d.append(icon(a.error ? "alert" : waiting ? "clock" : "check"), a.error ? `${label}: ${a.error}` : label);
     log.appendChild(d); log.scrollTop = log.scrollHeight;
   }
 
@@ -170,7 +191,7 @@
   function flushQueue() { if (state === "idle" && !busy && queue.length) { const [x, y] = queue.shift(); speak(x, y); } }
 
   function updateMute() {
-    const b = $("mute"); b.textContent = muted ? "🔇" : "🔊";
+    const b = $("mute"); b.classList.toggle("is-muted", muted);
     b.setAttribute("aria-pressed", muted ? "true" : "false"); b.setAttribute("aria-label", muted ? t("unmute") : t("mute")); b.title = b.getAttribute("aria-label");
   }
 
@@ -323,7 +344,7 @@
     shownCards.add(c.confirmation_id);
     const d = c.details || {};
     const box = document.createElement("div"); box.className = "conf"; box.dataset.id = c.confirmation_id;
-    const h = document.createElement("h3"); h.textContent = "🔐 " + t("conf_" + c.action);
+    const h = document.createElement("h3"); h.append(icon("lock"), t("conf_" + c.action));
     const who = document.createElement("div"); who.className = "who"; who.textContent = `${t("conf_to")}: ${d.customer || d.payee || ""}`;
     const mail = document.createElement("div"); mail.className = "mail"; mail.textContent = d.email || "";
     box.append(h, who, mail);
@@ -377,26 +398,48 @@
     document.querySelectorAll(".panel").forEach(p => { p.hidden = p.dataset.panel !== tab; p.id = "panel-" + p.dataset.panel; p.setAttribute("role", "tabpanel"); p.setAttribute("aria-labelledby", "tab-" + p.dataset.panel); });
   }
 
-  function kpi(label, value, foot, cls, footCls) {
+  function kpi(ic, label, value, foot, cls, footCls) {
     const d = document.createElement("div"); d.className = "kpi";
-    const l = document.createElement("div"); l.className = "label"; l.textContent = label;
+    const top = document.createElement("div"); top.className = "top";
+    const badge = document.createElement("span"); badge.className = "ic"; badge.appendChild(icon(ic));
+    const l = document.createElement("div"); l.className = "label"; l.textContent = label; top.append(badge, l);
     const v = document.createElement("div"); v.className = "value " + (cls || "");
     const [num, cur] = String(value).split(" "); v.textContent = num;
     if (cur) { const sm = document.createElement("small"); sm.textContent = cur; v.appendChild(sm); }
     const f = document.createElement("div"); f.className = "foot " + (footCls || ""); f.textContent = foot || " ";
-    d.append(l, v, f); return d;
+    d.append(top, v, f); return d;
   }
 
   function renderKpis(o) {
     const box = $("kpis"); box.textContent = "";
     const next = (o.next_bills || [])[0];
     box.append(
-      kpi(t("kpi_receivable"), money(o.receivable), o.overdue_invoices.length ? t("overdue_n")(o.overdue_invoices.length) : t("open_n")(o.open_invoices), "", o.overdue_invoices.length ? "bad" : ""),
-      kpi(t("kpi_bills"), money(o.bills_next_7_days), next ? t("next_bill")(next.payee, fmtDate(next.due_date)) : "", "", o.bills_overdue.length ? "bad" : ""),
-      kpi(t("kpi_income"), money(o.income), t("net")(money(o.net)), "pos"),
-      kpi(t("kpi_expense"), money(o.expense), o.top_expense_categories[0] ? `${t("cat")[o.top_expense_categories[0].category] || o.top_expense_categories[0].category} · ${money(o.top_expense_categories[0].amount)}` : ""),
-      kpi(t("kpi_proj"), money(o.projected_30_days), "", o.projected_30_days < 0 ? "neg" : "pos"),
+      kpi("inbox", t("kpi_receivable"), money(o.receivable), o.overdue_invoices.length ? t("overdue_n")(o.overdue_invoices.length) : t("open_n")(o.open_invoices), "", o.overdue_invoices.length ? "bad" : ""),
+      kpi("calendar", t("kpi_bills"), money(o.bills_next_7_days), next ? t("next_bill")(next.payee, fmtDate(next.due_date)) : "", "", o.bills_overdue.length ? "bad" : ""),
+      kpi("up", t("kpi_income"), money(o.income), t("net")(money(o.net)), "pos"),
+      kpi("down", t("kpi_expense"), money(o.expense), o.top_expense_categories[0] ? `${t("cat")[o.top_expense_categories[0].category] || o.top_expense_categories[0].category} · ${money(o.top_expense_categories[0].amount)}` : ""),
+      kpi("spark", t("kpi_proj"), money(o.projected_30_days), "", o.projected_30_days < 0 ? "neg" : "pos"),
     );
+  }
+
+  function renderAging(ag) {  // money owed, split by how late it is: what to chase first
+    const box = $("aging"); box.textContent = "";
+    const keys = ["not_due", "d1_30", "d31_60", "d61_plus"];
+    const total = ag ? keys.reduce((n, k) => n + (ag[k] || 0), 0) : 0;
+    box.hidden = !total; if (!total) return;
+    const head = document.createElement("div"); head.className = "aging-head"; head.textContent = t("aging_title");
+    const bar = document.createElement("div"); bar.className = "aging-bar";
+    const legend = document.createElement("div"); legend.className = "aging-legend";
+    for (const k of keys) {
+      const v = ag[k] || 0;
+      if (v) { const seg = document.createElement("span"); seg.className = "seg " + k; seg.style.width = (100 * v / total) + "%"; seg.title = `${t("aging")[k]}: ${money(v)}`; bar.appendChild(seg); }
+      const item = document.createElement("span"); item.className = "item" + (v ? "" : " zero");
+      const dot = document.createElement("i"); dot.className = k;
+      const lab = document.createElement("span"); lab.textContent = t("aging")[k];
+      const val = document.createElement("strong"); val.textContent = money(v);
+      item.append(dot, lab, val); legend.appendChild(item);
+    }
+    box.append(head, bar, legend);
   }
 
   function renderChart(days) {
@@ -422,12 +465,11 @@
 
   // AG Grid tables
   const grids = {};
-  const gridTheme = () => {
-    const dark = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
-    return agGrid.themeQuartz.withParams(dark
-      ? { backgroundColor: "#0d1b3e", foregroundColor: "#eef3ff", headerBackgroundColor: "#122450", headerTextColor: "#cfe0ff", borderColor: "#22355f", accentColor: "#4da3ff", fontSize: 13, headerFontWeight: 700 }
-      : { backgroundColor: "#ffffff", foregroundColor: "#0b1a3c", headerBackgroundColor: "#f2f6fc", headerTextColor: "#003087", borderColor: "#dde3ee", accentColor: "#0070e0", fontSize: 13, headerFontWeight: 700 });
-  };
+  const gridTheme = () => agGrid.themeQuartz.withParams({
+    fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, backgroundColor: "#ffffff", foregroundColor: "#1d2330",
+    headerBackgroundColor: "#f6f8fb", headerTextColor: "#647089", headerFontSize: 12, headerFontWeight: 650,
+    borderColor: "#e5e9f0", rowBorder: { color: "#eef1f5" }, wrapperBorderRadius: 12, accentColor: "#0070e0", rowHoverColor: "#f0f6fe", cellHorizontalPadding: 12,
+  });
   function pill(text, cls) { const s = document.createElement("span"); s.className = "pill " + (cls || ""); s.textContent = text; return s; }
   function statusPill(p) {
     const r = p.data; if (!r) return "";
@@ -468,11 +510,11 @@
       { headerName: t("col_actions"), cellRenderer: invoiceActions, width: 230, sortable: false },
     ];
     if (name === "bills") return [
-      { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: 170, cellRenderer: twoLines },
-      { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 115, flex: 0.9 },
-      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 118, flex: 0.8, sort: "asc" },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 120, flex: 0.9 },
-      { headerName: t("col_actions"), cellRenderer: billActions, width: 155, sortable: false },
+      { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: 140, cellRenderer: twoLines },
+      { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 112, flex: 0.9 },
+      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 104, flex: 0.8, sort: "asc" },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 116, flex: 0.9 },
+      { headerName: t("col_actions"), cellRenderer: billActions, width: 164, sortable: false },
     ];
     return [
       { field: "name", headerName: t("col_name"), flex: 1.2, minWidth: 140 },
@@ -494,14 +536,18 @@
       if (grids[name].__json !== json) { grids[name].setGridOption("rowData", rows); grids[name].__json = json; }  // no redraw when nothing changed
     }
   }
-  if (window.matchMedia) matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { for (const g of Object.values(grids)) g.setGridOption("theme", gridTheme()); });
 
   function renderList(id, items, empty, fmt) {
     const ul = $(id); ul.textContent = "";
     if (!items.length) { const li = document.createElement("li"); li.className = "empty"; li.textContent = empty; ul.appendChild(li); return; }
     for (const it of items) ul.appendChild(fmt(it));
   }
-  function li(when, text) { const el = document.createElement("li"); if (when) { const w = document.createElement("span"); w.className = "when"; w.textContent = when; el.appendChild(w); } el.append(text); return el; }
+  function li(when, text, ic) {
+    const el = document.createElement("li");
+    if (ic) { const s = document.createElement("span"); s.className = "li-ic"; s.appendChild(icon(ic)); el.appendChild(s); }
+    if (when) { const w = document.createElement("span"); w.className = "when"; w.textContent = when; el.appendChild(w); }
+    el.append(text); return el;
+  }
 
   let tabChosen = !!store.get("dp_tab");
   function render(s) {
@@ -509,11 +555,11 @@
     lastState = s; currency = s.business.currency;
     $("biz-name").textContent = s.business.name;
     $("sample-badge").hidden = !s.business.sample; $("sample-badge").textContent = t("sample");
-    renderKpis(s.overview); renderChart(s.cashflow);
+    renderKpis(s.overview); renderChart(s.cashflow); renderAging(s.overview.receivable_aging);
     if (window.agGrid) { setGrid("invoices", s.invoices); setGrid("bills", s.bills); setGrid("contacts", s.contacts); }
-    renderList("reminders", s.reminders, t("empty_reminders"), r => li(fmtWhen(r.due_at), (r.kind === "remind_customer" ? "📧 " : "⏰ ") + r.text));
+    renderList("reminders", s.reminders, t("empty_reminders"), r => li(fmtWhen(r.due_at), r.text, r.kind === "remind_customer" ? "mail" : "bell"));
     renderList("activity", s.activity, t("empty_activity"), a => li(new Date(a.at * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }), a.text));
-    renderList("memory", s.facts, t("empty_memory"), f => li("", "🧠 " + f));
+    renderList("memory", s.facts, t("empty_memory"), f => li("", f));
     for (const c of s.confirmations) addCard(cardFromState(c));
     const live = new Set(s.confirmations.map(c => c.id));
     $("cards").querySelectorAll(".conf").forEach(el => { if (!live.has(el.dataset.id)) { shownCards.delete(el.dataset.id); el.remove(); } });
@@ -566,7 +612,7 @@
     try {
       const b = await api(`/api/briefing?ws=${ws}&lang=${lang}`);
       const d = add("bot brief", b.text);
-      const play = document.createElement("button"); play.className = "play"; play.type = "button"; play.textContent = "🔊 " + t("play_brief");
+      const play = document.createElement("button"); play.className = "play"; play.type = "button"; play.append(icon("play"), t("play_brief"));
       play.addEventListener("click", () => { unlockAudio(); speak(b.text, b.speech_id); });
       d.appendChild(play);
     } catch (e) { /* briefing is optional */ }

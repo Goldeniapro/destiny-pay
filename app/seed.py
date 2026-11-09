@@ -25,7 +25,14 @@ TEXT = {
            "sales": ["Alpaca sweater", "Woven scarf", "Ayacucho altarpiece", "Silver earrings", "Chullo hat", "Andean blanket"],
            "exp": [("Yarn and dyes", "supplies"), ("Taxi to the market", "transport"), ("October rent", "rent"), ("Social media ads", "marketing")]},
 }
-TEXT["pt"] = TEXT["en"]
+TEXT["pt"] = {"sarah": "Turista de Chicago; prefere inglês.", "lucho": "Cliente local; paga com Yape.", "textiles": "Fornecedor de fio de alpaca.",
+              "marta": "Dona da loja.", "yarn": "Pedido de fio de alpaca", "rent": "Aluguel da loja", "power": "Internet e luz",
+              "bags": "Sacolas e embalagens", "call": "Ligar para a Textiles Andinos sobre o novo pedido",
+              "facts": ["Sarah Miller volta para Chicago em 20 de novembro.", "Turistas costumam pagar com PayPal; clientes locais com Yape.",
+                        "O aluguel é pago a Marta Quispe todo dia 5."],
+              "sales": ["Suéter de alpaca", "Cachecol tecido", "Retábulo ayacuchano", "Brincos de prata", "Gorro chullo", "Manta andina"],
+              "exp": [("Fio e tinturas", "supplies"), ("Táxi até o mercado", "transport"), ("Aluguel de outubro", "rent"), ("Anúncios nas redes", "marketing")]}
+INVOICE_ITEMS = {"es": ("Chompa de alpaca", "Retablo ayacuchano"), "en": ("Alpaca sweater", "Ayacucho altarpiece"), "pt": ("Suéter de alpaca", "Retábulo ayacuchano")}
 
 
 def seed_demo(biz: Business, lang: str) -> None:
@@ -51,4 +58,11 @@ def seed_demo(biz: Business, lang: str) -> None:
     biz.create_reminder(tx["call"], tomorrow_10.strftime("%Y-%m-%dT%H:%M"))
     for fact in tx["facts"]:
         biz.remember(fact)
+    if getattr(biz.paypal, "offline", False):  # offline demo only: never create sample invoices on a real PayPal account
+        sweater, retablo = INVOICE_ITEMS.get(lang, INVOICE_ITEMS["en"])
+        a = biz.draft_invoice("Sarah Miller", "sarah.miller@example.com", [{"name": sweater, "quantity": 2, "unit_price": 45}], "")
+        biz.send_invoice(a["id"])
+        b = biz.draft_invoice("Lucho Ramos", "lucho.ramos@example.com", [{"name": retablo, "quantity": 1, "unit_price": 120}], "")
+        biz.send_invoice(b["id"])
+        biz.store.x("UPDATE invoices SET due_date=? WHERE id=?", ((today - timedelta(days=12)).isoformat(), b["id"]))
     biz.log("demo", "Sample business loaded", "demo", {})
