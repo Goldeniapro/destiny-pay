@@ -352,6 +352,7 @@ def status():
         "voice": {"tts": voice.tts_enabled, "stt": voice.stt_enabled},
         "webhooks": bool(WEBHOOK_ID) and not DEMO_MODE,
         "langs": list(LANGS),
+        "build": (os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("RENDER_GIT_COMMIT") or "")[:7],
     }
 
 
