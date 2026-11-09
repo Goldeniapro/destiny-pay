@@ -283,7 +283,7 @@ def test_code_always_reads_back_what_a_yes_will_approve(setup):
     bill = biz.add_bill("Marta Quispe", "Alquiler", 1900, biz.today().isoformat(), "monthly", "marta@example.com")
     agent, _ = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("Tienes 1.900 de alquiler. ¿Te pongo un recordatorio?")])
     res = agent.chat(biz.ws, "conv-rb", "Págale a Marta", "es")
-    assert res["reply"].endswith("Para confirmar: pagar 1.900,00 USD a Marta Quispe con PayPal. Di «sí» o toca Confirmar.")
+    assert res["reply"].endswith("Para confirmar: pagar 1.900,00 USD a Marta Quispe con PayPal. Di «sí» o toca Autorizar.")
 
 
 def test_conversation_ids_are_scoped_to_their_business(setup, make_biz):
