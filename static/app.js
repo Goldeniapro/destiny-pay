@@ -513,7 +513,7 @@
       { field: "customer", headerName: t("col_customer"), flex: 1.3, minWidth: 110 },
       { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: 105, flex: 0.9 },
       { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 88, flex: 0.7, hide: narrow() },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 110, flex: 0.9 },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 132, flex: 1 },
       { headerName: t("col_actions"), cellRenderer: invoiceActions, width: status && status.demo_mode ? 236 : 130, sortable: false },
     ];
     if (name === "bills") return [
