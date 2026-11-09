@@ -90,6 +90,7 @@ class Voice:
         """Yield mp3 bytes as Fish Audio produces them (raises VoiceError before the first byte on failure)."""
         text, lang = self._take(sid)
         voice_id = self.voice_for(lang)
+        text = spoken(text, lang)
         key = hashlib.sha256(f"{voice_id}|{self.model}|{text}".encode()).hexdigest()
         with self._lock:
             cached = self._audio.get(key)
@@ -151,6 +152,21 @@ class Voice:
         if r.status_code != 200:
             raise VoiceError(f"speech service error {r.status_code}: {r.text[:200]}")
         return clean_transcript(str(r.json().get("text", "")))
+
+
+CURRENCY_WORDS = {"USD": {"es": "dólares", "en": "dollars", "pt": "dólares"}, "PEN": {"es": "soles", "en": "soles", "pt": "soles"},
+                  "EUR": {"es": "euros", "en": "euros", "pt": "euros"}}
+_AMOUNT = re.compile(r"(\d{1,3}(?:[.,\u00a0 ]\d{3})*|\d+)(?:[.,](\d{2}))?\s?(USD|PEN|EUR)\b")
+
+
+def spoken(text: str, lang: str) -> str:
+    """How an amount should sound, not how it reads: "1.900,00 USD" -> "1.900 dólares" (the screen keeps the exact text)."""
+    def say(m: re.Match) -> str:
+        whole, cents, cur = m.group(1), m.group(2), m.group(3)
+        word = CURRENCY_WORDS[cur].get(lang, CURRENCY_WORDS[cur]["en"])
+        sep = "," if lang in ("es", "pt") else "."
+        return f"{whole}{sep}{cents} {word}" if cents and cents != "00" else f"{whole} {word}"
+    return _AMOUNT.sub(say, text)
 
 
 def clean_transcript(text: str) -> str:

@@ -107,3 +107,10 @@ def test_singular_and_plural_wording():
     from app.i18n import t
     assert t("b_overdue", "es", n=1) == "1 ya está vencido." and t("b_overdue", "es", n=3) == "3 ya están vencidos."
     assert t("b_bills_overdue", "pt", n=2, payee="X", amount="1 USD").startswith("Você tem 2 pagamentos vencidos")
+
+
+def test_amounts_are_spoken_naturally():
+    from app.voice import spoken
+    assert spoken("Le pagué 1.900,00 USD a Marta.", "es") == "Le pagué 1.900 dólares a Marta."
+    assert spoken("Paguei 2,50 USD a Textiles.", "pt") == "Paguei 2,50 dólares a Textiles."
+    assert spoken("I paid 45.00 USD and 1,200.00 USD", "en") == "I paid 45 dollars and 1,200 dollars"

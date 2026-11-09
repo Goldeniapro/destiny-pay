@@ -57,6 +57,10 @@ def normalize_email(raw: str) -> str:
     return re.sub(r"\s+", "", e)
 
 
+def _body(e: Exception) -> str:
+    return getattr(e, "body", "") or str(e)
+
+
 def _tag(ws: str) -> str:
     """Short public tag for a business (invoice reference, payout batch id) that reveals nothing of its secret id."""
     return hashlib.sha256(ws.encode()).hexdigest()[:10]
@@ -455,7 +459,7 @@ class Business:
                                             subject=f"Payment from {self.info['name']}")
         except Exception as e:
             msg = str(e)
-            if isinstance(e, PayPalError) and re.match(r"PayPal 4\d\d", msg) and "SENDER_BATCH_ID" not in msg.upper():
+            if isinstance(e, PayPalError) and re.match(r"PayPal 4\d\d", msg) and "SENDER_BATCH_ID" not in _body(e).upper():
                 # PayPal rejected the request: nothing was paid, the owner can retry
                 self.store.x("UPDATE payouts SET status='failed' WHERE sender_batch_id=?", (sender_batch_id,))
                 self.store.x("UPDATE bills SET status='pending' WHERE id=? AND status='processing'", (b["id"],))
@@ -517,8 +521,8 @@ class Business:
                         info = self.paypal.create_payout(p["sender_batch_id"], b["payee_email"], b["amount"])
                         batch_id = (info.get("batch_header") or {}).get("payout_batch_id", "") if isinstance(info, dict) else ""
                     except PayPalError as e:
-                        if "SENDER_BATCH_ID" in str(e).upper() or "ALREADY" in str(e).upper():
-                            batch_id = self._batch_from_error(str(e))  # PayPal links the original payout
+                        if "SENDER_BATCH_ID" in _body(e).upper() or "ALREADY" in _body(e).upper():
+                            batch_id = self._batch_from_error(_body(e))  # PayPal links the original payout
                             if not batch_id:
                                 self.store.x("UPDATE payouts SET status='accepted' WHERE sender_batch_id=?", (p["sender_batch_id"],))
                                 continue  # accepted earlier, status unknown: the owner was told to check PayPal

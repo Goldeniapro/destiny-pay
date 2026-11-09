@@ -20,7 +20,9 @@ PAYMENT_METHODS = {"CASH", "BANK_TRANSFER", "CHECK", "CREDIT_CARD", "DEBIT_CARD"
 
 
 class PayPalError(RuntimeError):
-    pass
+    def __init__(self, message: str, body: str = "") -> None:
+        super().__init__(message)
+        self.body = body or message  # full response, e.g. to find the original payout PayPal links in a duplicate error
 
 
 @dataclass
@@ -100,7 +102,7 @@ class PayPalClient:
     @staticmethod
     def _check(r: httpx.Response) -> None:
         if r.status_code >= 400:
-            raise PayPalError(f"PayPal {r.status_code}: {r.text[:400]}")
+            raise PayPalError(f"PayPal {r.status_code}: {r.text[:400]}", body=r.text[:8000])
 
     # --- invoicing ----------------------------------------------------------
     def create_invoice(self, recipient_name: str, recipient_email: str, items: list[dict], note: str = "", reference: str = "") -> dict:
