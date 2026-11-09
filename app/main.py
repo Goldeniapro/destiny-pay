@@ -278,11 +278,6 @@ def healthz():
     return {"ok": True}
 
 
-@app.get("/api/_ipcheck")  # TEMPORARY: the address the limits use for this caller, and the header source
-def ipcheck(request: Request):
-    return {"limit_key": client_ip(request), "header": CLIENT_IP_HEADER, "x_real_ip": request.headers.get("x-real-ip")}
-
-
 @app.get("/api/status")
 def status():
     return {
