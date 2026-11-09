@@ -87,6 +87,7 @@ def test_each_language_can_have_its_own_voice(monkeypatch):
     monkeypatch.setenv("FISH_VOICE_ID", "")
     monkeypatch.setenv("FISH_VOICE_ID_ES", "voz-es")
     monkeypatch.setenv("FISH_VOICE_ID_EN", "voice-en")
+    monkeypatch.delenv("FISH_VOICE_ID_PT", raising=False)  # a real .env may set it: this test needs pt without a voice
     used = []
 
     def fish(req):
