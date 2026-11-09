@@ -277,15 +277,13 @@ def test_two_payments_in_one_turn_cannot_be_approved_by_voice(setup):
     assert biz.paypal.payouts == {}
 
 
-def test_code_reads_back_the_amount_when_the_model_omits_it(setup):
+def test_code_always_reads_back_what_a_yes_will_approve(setup):
+    """Security audit M3: the reply always ends with the code's own readback, whatever the model said."""
     biz, make = setup
     bill = biz.add_bill("Marta Quispe", "Alquiler", 1900, biz.today().isoformat(), "monthly", "marta@example.com")
-    agent, _ = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("¿Confirmas el pago?")])
+    agent, _ = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("Tienes 1.900 de alquiler. ¿Te pongo un recordatorio?")])
     res = agent.chat(biz.ws, "conv-rb", "Págale a Marta", "es")
-    assert res["reply"].endswith("Para confirmar: pagar 1.900,00 USD a Marta Quispe.")
-    agent2, _ = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("Le pago 1.900 dólares a Marta. ¿Confirmas?")])
-    res2 = agent2.chat(biz.ws, "conv-rb2", "Págale a Marta", "es")
-    assert res2["reply"] == "Le pago 1.900 dólares a Marta. ¿Confirmas?"  # amount already stated: no repetition
+    assert res["reply"].endswith("Para confirmar: pagar 1.900,00 USD a Marta Quispe con PayPal. Di «sí» o toca Confirmar.")
 
 
 def test_conversation_ids_are_scoped_to_their_business(setup, make_biz):

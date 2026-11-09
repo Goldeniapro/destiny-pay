@@ -20,9 +20,13 @@ PAYMENT_METHODS = {"CASH", "BANK_TRANSFER", "CHECK", "CREDIT_CARD", "DEBIT_CARD"
 
 
 class PayPalError(RuntimeError):
-    def __init__(self, message: str, body: str = "") -> None:
+    def __init__(self, message: str, body: str = "", status: int = 0, uncertain: bool = True) -> None:
         super().__init__(message)
         self.body = body or message  # full response, e.g. to find the original payout PayPal links in a duplicate error
+        self.status = status  # HTTP status, 0 if PayPal was never reached
+        # True when PayPal may have received and processed the request (a network error, timeout,
+        # 5xx or 429 happened on this or an earlier attempt). Only a clean, definitive answer is False.
+        self.uncertain = uncertain
 
 
 @dataclass
@@ -74,13 +78,14 @@ class PayPalClient:
             # Same id on every retry: if PayPal already processed a request that timed out,
             # the retry does not create a second invoice or record a payment twice.
             headers["PayPal-Request-Id"] = str(uuid.uuid4())
-        refreshed = force_token = False
+        refreshed = force_token = uncertain = False
         for attempt in range(3):
             try:
                 auth = self._token_header(force=force_token)
                 force_token = False
                 r = self._http.request(method, path, headers={**headers, **auth}, **kw)
             except httpx.HTTPError as e:
+                uncertain = True  # the request may have reached PayPal before the connection failed
                 if attempt == 2:
                     raise PayPalError(f"Could not reach PayPal: {e.__class__.__name__}") from e
                 time.sleep(self.retry_delay * (attempt + 1))
@@ -88,11 +93,13 @@ class PayPalClient:
             if r.status_code == 401 and not refreshed:
                 refreshed = force_token = True  # token revoked or expired early: retry once with a fresh one
                 continue
-            if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                time.sleep(self.retry_delay * (attempt + 1))
-                continue
+            if r.status_code in (429, 500, 502, 503, 504):
+                uncertain = True
+                if attempt < 2:
+                    time.sleep(self.retry_delay * (attempt + 1))
+                    continue
             break
-        self._check(r)
+        self._check(r, uncertain)
         if not r.content:
             return {}
         if "json" in r.headers.get("content-type", ""):
@@ -100,9 +107,10 @@ class PayPalClient:
         return r.text
 
     @staticmethod
-    def _check(r: httpx.Response) -> None:
+    def _check(r: httpx.Response, uncertain: bool = False) -> None:
         if r.status_code >= 400:
-            raise PayPalError(f"PayPal {r.status_code}: {r.text[:400]}", body=r.text[:8000])
+            raise PayPalError(f"PayPal {r.status_code}: {r.text[:400]}", body=r.text[:8000], status=r.status_code,
+                              uncertain=uncertain or r.status_code in (401, 403, 408, 409, 429) or r.status_code >= 500)
 
     # --- invoicing ----------------------------------------------------------
     def create_invoice(self, recipient_name: str, recipient_email: str, items: list[dict], note: str = "", reference: str = "",

@@ -24,6 +24,7 @@ from .paypal import PayPalError
 
 MODEL = "claude-opus-5-5"
 EFFORT = os.environ.get("DP_EFFORT", "low")  # short spoken replies; raise to "medium" if quality drops
+MAX_TOKENS = int(os.environ.get("DP_MAX_TOKENS", "4000"))  # replies are a few spoken sentences
 TURN_SECONDS = float(os.environ.get("DP_TURN_SECONDS", "35"))
 MAX_TURNS_PER_CONVERSATION = int(os.environ.get("DP_MAX_TURNS", "40"))
 DAILY_TOKEN_BUDGET = int(os.environ.get("DP_DAILY_TOKEN_BUDGET", "3000000"))
@@ -195,13 +196,14 @@ class TokenBudget:
             self._roll()
             return self.used >= self.limit
 
-    def add(self, usage: Any) -> None:
+    def add(self, usage: Any) -> int:
         if usage is None:
-            return
+            return 0
         n = sum(int(getattr(usage, k, 0) or 0) for k in ("input_tokens", "output_tokens", "cache_creation_input_tokens"))
         with self._lock:
             self._roll()
             self.used += n
+        return n
 
 
 def ai_configured() -> bool:
@@ -217,6 +219,7 @@ class Conversation:
     turns: int = 0
     last_seen: float = field(default_factory=time.time)
     awaiting: str = ""  # confirmation the assistant asked about in its last turn
+    spent: int = 0  # tokens used by the last turn (the server charges them to the visitor's daily share)
 
 
 class ConversationStore:
@@ -346,15 +349,12 @@ class DestinyPayAgent:
         conv.awaiting = c["confirmation_id"]
         d = c.get("details") or {}
         amount = d.get("total", d.get("amount"))
-        if amount is None:
-            return reply
-        plain = re.sub(r"(?<=\d)[.,\s\u00a0](?=\d{3}(?!\d))", "", reply)  # 1.900 / 1,900 / 1 900 -> 1900
-        if str(int(float(amount))) in re.findall(r"\d+", plain):
-            return reply
-        money = fmt_money(amount, d.get("currency", ""), conv.lang)
         key = {"send_invoice": "rb_send_invoice", "cancel_invoice": "rb_cancel_invoice", "pay_bill": "rb_pay_bill"}.get(c.get("action", ""))
-        if not key:
+        if amount is None or not key:
+            conv.awaiting = ""  # nothing the code can read back: only the buttons can approve it
             return reply
+        # Always the code's own words, whatever the model said: a "yes" can only approve exactly what was read here.
+        money = fmt_money(amount, d.get("currency", ""), conv.lang)
         return f"{reply} {t(key, conv.lang, name=d.get('customer') or d.get('payee') or '', total=money)}"
 
     # --- the loop ----------------------------------------------------------------------
@@ -372,6 +372,7 @@ class DestinyPayAgent:
     def _run(self, conv: Conversation, biz: Business, conversation_id: str, user_text: str, alternatives: list[str]) -> dict:
         lang, messages = conv.lang, conv.messages
         start = len(messages)
+        conv.spent = 0
         messages.append({"role": "user", "content": self._user_content(conv, biz, user_text, alternatives)})
         actions: list[dict] = []
         ui: list[dict] = []
@@ -395,7 +396,7 @@ class DestinyPayAgent:
             try:
                 response = self.client.beta.messages.create(
                     model=MODEL,
-                    max_tokens=8000,
+                    max_tokens=MAX_TOKENS,
                     system=self._system(conv, biz),
                     tools=TOOLS,
                     messages=messages,
@@ -411,7 +412,7 @@ class DestinyPayAgent:
                 return result
             except anthropic.AnthropicError:
                 return fail("api_error")
-            self.budget.add(getattr(response, "usage", None))
+            conv.spent += self.budget.add(getattr(response, "usage", None))
 
             if response.stop_reason == "refusal":
                 return fail("refusal")

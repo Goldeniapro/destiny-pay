@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import secrets
@@ -24,7 +25,7 @@ from . import i18n
 from .agent import DestinyPayAgent, ai_configured
 from .business import Business, ValidationError
 from .fake import FakePayPal
-from .i18n import LANGS
+from .i18n import LANGS, classify_reply
 from .paypal import UNPAID_STATUSES, PayPalClient, PayPalError
 from .seed import NAMES, seed_demo, seed_invoices
 from .store import Store
@@ -211,6 +212,40 @@ def _env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, str(default)))
 
 
+class AmountQuota:
+    """Per-visitor daily total (tokens, or money paid out): one visitor can't use up what the whole demo shares."""
+
+    def __init__(self, per_day: float) -> None:
+        self.per_day, self.day, self.used = per_day, time.strftime("%Y-%m-%d"), defaultdict(float)
+        self._lock = threading.Lock()
+
+    def _roll(self) -> None:
+        today = time.strftime("%Y-%m-%d")
+        if today != self.day:
+            self.day, self.used = today, defaultdict(float)
+
+    def left(self, key: str) -> float:
+        with self._lock:
+            self._roll()
+            return self.per_day - self.used[key]
+
+    def take(self, key: str, amount: float) -> bool:
+        with self._lock:
+            self._roll()
+            if self.used[key] + amount > self.per_day:
+                return False
+            self.used[key] += amount
+            return True
+
+    def charge(self, key: str, amount: float) -> None:
+        with self._lock:
+            self._roll()
+            self.used[key] += amount
+
+
+tokens_per_ip = AmountQuota(_env_int("DP_TOKENS_PER_IP_DAY", 300000))
+payouts_per_ip = AmountQuota(_env_int("DP_PAYOUT_PER_IP_DAY", 3000))
+
 quotas = {
     "workspace_day": DailyQuota(_env_int("DP_WORKSPACES_PER_IP_DAY", 20)),
     "chat_day": DailyQuota(_env_int("DP_CHATS_PER_IP_DAY", 150)),
@@ -230,6 +265,7 @@ limits = {
     "chat_ws": RateLimiter(_env_int("DP_CHAT_PER_WORKSPACE_PER_MINUTE", 15)),
     "state_ws": RateLimiter(_env_int("DP_STATE_PER_WORKSPACE_PER_MINUTE", 60)),
     "webhook_all": RateLimiter(_env_int("DP_WEBHOOKS_PER_MINUTE", 120)),
+    "webhook": RateLimiter(_env_int("DP_WEBHOOKS_PER_IP_PER_MINUTE", 30)),
 }
 
 
@@ -239,7 +275,21 @@ CLIENT_IP_HEADER = os.environ.get("DP_CLIENT_IP_HEADER", "").lower() or (
     "x-real-ip" if any(k.startswith("RAILWAY_") for k in os.environ) else "")
 
 
+def _bucket(ip: str) -> str:
+    """IPv6 visitors usually own a whole /64: count it as one visitor so rotating addresses doesn't reset limits."""
+    if ":" in ip:
+        try:
+            return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+        except ValueError:
+            return ip
+    return ip
+
+
 def client_ip(request: Request) -> str:
+    return _bucket(_raw_client_ip(request))
+
+
+def _raw_client_ip(request: Request) -> str:
     if CLIENT_IP_HEADER:
         trusted = request.headers.get(CLIENT_IP_HEADER, "").strip()
         if trusted:
@@ -259,6 +309,13 @@ def limit(request: Request, *names: str, ws: str = "") -> None:
         key = "all" if name.endswith("_all") else ws if name.endswith("_ws") else ip
         if not limits[name].allow(key):
             raise HTTPException(429, "Too many requests. Wait a minute and try again.")
+
+
+def charge_payout(ip: str, conf: dict) -> None:
+    """Count a supplier payment against the visitor's daily PayPal allowance before it can run."""
+    amount = float((conf.get("details") or {}).get("amount") or 0)
+    if not payouts_per_ip.take(ip, amount):
+        raise HTTPException(429, "Daily PayPal payment limit reached for this connection. Please come back tomorrow.")
 
 
 def open_business(ws: str) -> Business:
@@ -398,12 +455,20 @@ def chat(body: ChatIn, request: Request):
     text = body.message.strip()
     if not text:
         raise HTTPException(400, "Empty message")
+    ip = client_ip(request)
+    if tokens_per_ip.left(ip) <= 0:
+        raise HTTPException(429, "Daily demo limit reached for this connection. Please come back tomorrow.")
     pending = agent.conversations.peek(body.conversation_id, body.workspace_id)
     if pending is not None and pending.awaiting:
         limit(request, "money_day")  # this message may approve a payment by voice
+        conf = next((c for c in open_business(body.workspace_id).pending_confirmations() if c["id"] == pending.awaiting), None)
+        if conf and conf["kind"] == "pay_bill" and classify_reply(text, "pay_bill") == "yes":
+            charge_payout(ip, conf)
     alternatives = [a[:300] for a in body.alternatives]
     res = agent.chat(body.workspace_id, body.conversation_id, text, lang_of(body.lang), alternatives)
     conv = agent.conversations.peek(body.conversation_id, body.workspace_id)
+    if conv is not None:
+        tokens_per_ip.charge(ip, conv.spent)
     res["speech_id"] = voice.register(res.get("reply", ""), conv.lang if conv else lang_of(body.lang))
     return res
 
@@ -419,7 +484,11 @@ class ConfirmIn(BaseModel):
 @app.post("/api/confirm")
 def confirm(body: ConfirmIn, request: Request):
     limit(request, "chat", "chat_ws", *(["money_day"] if body.approve else []), ws=body.workspace_id)
-    open_business(body.workspace_id)
+    biz = open_business(body.workspace_id)
+    if body.approve:
+        conf = next((c for c in biz.pending_confirmations() if c["id"] == body.confirmation_id), None)
+        if conf and conf["kind"] == "pay_bill":
+            charge_payout(client_ip(request), conf)
     res = agent.confirm(body.workspace_id, body.conversation_id, body.confirmation_id, body.approve, lang_of(body.lang))
     res["speech_id"] = voice.register(res["reply"], lang_of(body.lang))
     return res
@@ -458,24 +527,38 @@ _seen_events: OrderedDict[str, float] = OrderedDict()
 _seen_lock = threading.Lock()
 
 
-def _first_time(event_id: str) -> bool:
-    """PayPal retries deliveries for days: handle each event id once."""
+def _fresh(stamp: str, window: float = 900) -> bool:
+    """PayPal signs a transmission time: a delivery more than 15 minutes off is a replay or a forgery."""
+    from datetime import datetime
+    try:
+        sent = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return False
+    return abs(time.time() - sent) <= window
+
+
+def _seen(event_id: str) -> bool:
     with _seen_lock:
-        if not event_id or event_id in _seen_events:
-            return not event_id
+        return bool(event_id) and event_id in _seen_events
+
+
+def _mark_seen(event_id: str) -> None:
+    """Only after the event was handled: if handling fails, PayPal's retry still gets through."""
+    if not event_id:
+        return
+    with _seen_lock:
         _seen_events[event_id] = time.time()
         while len(_seen_events) > 5000:
             _seen_events.popitem(last=False)
-        return True
 
 
 @app.post("/api/paypal/webhook")
 async def paypal_webhook(request: Request):
     if DEMO_MODE or not WEBHOOK_ID:
         raise HTTPException(404, "Webhooks are not configured")
-    limit(request, "webhook_all")
-    if not str(request.headers.get("paypal-cert-url", "")).startswith(CERT_HOSTS):
-        raise HTTPException(400, "Signature verification failed")
+    limit(request, "webhook", "webhook_all")  # per sender first, so one forger can't starve PayPal's real deliveries
+    if not str(request.headers.get("paypal-cert-url", "")).startswith(CERT_HOSTS) or not _fresh(request.headers.get("paypal-transmission-time", "")):
+        raise HTTPException(400, "Signature verification failed")  # cheap checks before calling PayPal
     try:
         event = await request.json()
     except Exception:
@@ -493,7 +576,8 @@ def _handle_webhook(headers: dict, event: dict) -> dict:
         genuine = False
     if not genuine:
         raise HTTPException(400, "Signature verification failed")
-    if not _first_time(str(event.get("id", ""))):
+    event_id = str(event.get("id", ""))
+    if _seen(event_id):
         return {"ok": True, "duplicate": True}
     kind = str(event.get("event_type", ""))
     resource = event.get("resource") or {}
@@ -515,6 +599,7 @@ def _handle_webhook(headers: dict, event: dict) -> dict:
                 business_factory(row["ws"]).check_payouts()
             except PayPalError:
                 log.warning("payout check after webhook failed for %s (%s)", batch_id, status_value)
+    _mark_seen(event_id)
     return {"ok": True}
 
 

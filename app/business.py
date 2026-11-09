@@ -27,6 +27,7 @@ MAX_FACTS = 100
 MAX_MOVEMENTS = 3000
 HOLD_RISK_FACTOR, HOLD_RISK_MIN = 3.0, 500.0  # "unusual change in activity" warning
 UNCLAIMED_FOLLOW_UP_DAYS = 3
+UNKNOWN_RESEND_SECONDS = 300
 CONFIRMATION_TTL = 15 * 60
 PAYOUT_MAX = float(os.environ.get("DP_PAYOUT_MAX", "2000"))              # per payment
 PAYOUT_DAILY_WS = float(os.environ.get("DP_PAYOUT_DAILY_LIMIT", "3000"))   # per business per day
@@ -221,7 +222,9 @@ class Business:
                      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                      (inv["id"], self.ws, name, inv.get("status", "DRAFT"), total, total, self.currency, due_date,
                       json.dumps({"items": clean, "items_key": json.dumps(clean, sort_keys=True), "email": email}, ensure_ascii=False), now, now, 0))
-        self.save_contact(name, email, "customer")
+        known = self.store.one("SELECT kind, email FROM contacts WHERE ws=? AND name=? COLLATE NOCASE", (self.ws, name))
+        if known is None or (known["kind"] == "customer" and not known["email"]):
+            self.save_contact(name, email, "customer")  # never overwrite a saved email or turn a supplier into a customer
         self.log("invoice_draft", f"Draft invoice for {name}: {i18n.fmt_money(total, self.currency)}", "invoice_draft", {"name": name, "amount": [total, self.currency]}, invoice_id=inv["id"])
         view = self.refresh_invoice(inv["id"])
         if total >= HOLD_RISK_MIN and prev_max and total > HOLD_RISK_FACTOR * prev_max:
@@ -445,24 +448,26 @@ class Business:
         if b["amount"] > PAYOUT_MAX:
             raise ValidationError(f"For safety, PayPal payments from the demo are limited to {PAYOUT_MAX:,.0f} per bill.")
         day_ago = time.time() - 86400
-        spent_ws = self.store.one("SELECT COALESCE(SUM(amount),0) s FROM payouts WHERE ws=? AND created_at>? AND status NOT IN ('failed')", (self.ws, day_ago))["s"]
-        spent_all = self.store.one("SELECT COALESCE(SUM(amount),0) s FROM payouts WHERE created_at>? AND status NOT IN ('failed')", (day_ago,))["s"]
-        if spent_ws + b["amount"] > PAYOUT_DAILY_WS or spent_all + b["amount"] > PAYOUT_DAILY_ALL:
-            raise ValidationError("For safety, today's limit for PayPal payments was reached. Try again tomorrow.")
-        if self.store.x("UPDATE bills SET status='processing' WHERE id=? AND status='pending'", (b["id"],)).rowcount != 1:
-            raise ValidationError("That bill is already paid or its payment is in progress.")  # someone else claimed it first
-        attempt = self.store.one("SELECT COUNT(*) n FROM payouts WHERE bill_id=? AND ws=?", (b["id"], self.ws))["n"] + 1
-        sender_batch_id = f"dp{_tag(self.ws)}b{b['id']}a{attempt}"
-        self.store.x("INSERT INTO payouts(sender_batch_id,ws,bill_id,status,amount,created_at) VALUES(?,?,?,?,?,?)",
-                     (sender_batch_id, self.ws, b["id"], "starting", b["amount"], time.time()))
+        with self.store.lock:  # cap check, bill claim and payout row in one step: parallel confirms can't exceed the caps
+            spent_ws = self.store.one("SELECT COALESCE(SUM(amount),0) s FROM payouts WHERE ws=? AND created_at>? AND status NOT IN ('failed')", (self.ws, day_ago))["s"]
+            spent_all = self.store.one("SELECT COALESCE(SUM(amount),0) s FROM payouts WHERE created_at>? AND status NOT IN ('failed')", (day_ago,))["s"]
+            if spent_ws + b["amount"] > PAYOUT_DAILY_WS or spent_all + b["amount"] > PAYOUT_DAILY_ALL:
+                raise ValidationError("For safety, today's limit for PayPal payments was reached. Try again tomorrow.")
+            if self.store.x("UPDATE bills SET status='processing' WHERE id=? AND status='pending'", (b["id"],)).rowcount != 1:
+                raise ValidationError("That bill is already paid or its payment is in progress.")  # someone else claimed it first
+            attempt = self.store.one("SELECT COUNT(*) n FROM payouts WHERE bill_id=? AND ws=?", (b["id"], self.ws))["n"] + 1
+            sender_batch_id = f"dp{_tag(self.ws)}b{b['id']}a{attempt}"
+            self.store.x("INSERT INTO payouts(sender_batch_id,ws,bill_id,status,amount,created_at) VALUES(?,?,?,?,?,?)",
+                         (sender_batch_id, self.ws, b["id"], "starting", b["amount"], time.time()))
         try:
             out = self.paypal.create_payout(sender_batch_id, b["payee_email"], b["amount"],
                                             note=_clean(f"{b['description'] or 'Payment'} - {self.info['name']}", 200),
                                             subject=f"Payment from {self.info['name']}")
         except Exception as e:
-            msg = str(e)
-            if isinstance(e, PayPalError) and re.match(r"PayPal 4\d\d", msg) and "SENDER_BATCH_ID" not in _body(e).upper():
-                # PayPal rejected the request: nothing was paid, the owner can retry
+            if (isinstance(e, PayPalError) and e.status in (400, 422) and not e.uncertain
+                    and "SENDER_BATCH_ID" not in _body(e).upper()):
+                # A clean validation refusal on the only attempt: PayPal never accepted it, nothing was paid, the owner can retry.
+                # Anything else (timeouts, 5xx, 429, auth errors, a retry after any of those) may have been paid.
                 self.store.x("UPDATE payouts SET status='failed' WHERE sender_batch_id=?", (sender_batch_id,))
                 self.store.x("UPDATE bills SET status='pending' WHERE id=? AND status='processing'", (b["id"],))
                 raise
@@ -502,7 +507,8 @@ class Business:
         """Settle, keep waiting, or roll back payouts from PayPal's own status. Safe to run any number of times."""
         now = time.time()
         # stale 'starting' rows (a crash between our insert and PayPal's answer) are unknown, never forgotten
-        self.store.x("UPDATE payouts SET status='unknown' WHERE ws=? AND status='starting' AND created_at<?", (self.ws, now - 60))
+        # longer than the slowest possible create_payout call (3 attempts x 30 s + back-off), so it never races the original
+        self.store.x("UPDATE payouts SET status='unknown' WHERE ws=? AND status='starting' AND created_at<?", (self.ws, now - 180))
         sql = ("SELECT * FROM payouts WHERE ws=? AND (status NOT IN ('done','failed','unclaimed') "
                "OR (status='unclaimed' AND checked_at<?))")
         args: tuple = (self.ws, now - 1800)  # unclaimed payouts are rechecked every 30 minutes until claimed or returned
@@ -510,8 +516,10 @@ class Business:
             sql, args = sql + " AND sender_batch_id=?", args + (only,)
         settled = 0
         for p in self.store.q(sql, args):
-            if p["status"] == "starting":
-                continue
+            if p["status"] in ("starting", "accepted"):
+                continue  # accepted = PayPal has it but gave no link: never re-send; the owner settles it after checking PayPal
+            if p["status"] == "unknown" and not p["batch_id"] and now - p["checked_at"] < UNKNOWN_RESEND_SECONDS:
+                continue  # gentle back-off: re-sending the same id is safe but should not hammer PayPal
             b = self.store.one("SELECT * FROM bills WHERE id=? AND ws=?", (p["bill_id"], self.ws))
             if b is None:
                 continue
@@ -528,10 +536,9 @@ class Business:
                             if not batch_id:
                                 self.store.x("UPDATE payouts SET status='accepted' WHERE sender_batch_id=?", (p["sender_batch_id"],))
                                 continue  # accepted earlier, status unknown: the owner was told to check PayPal
-                        elif re.match(r"PayPal 4\d\d", str(e)):
-                            self._payout_failed(b, p["sender_batch_id"])  # PayPal refused it: nothing was paid
-                            continue
                         else:
+                            # Never conclude "not paid" from a failed re-send: the first attempt may have gone through.
+                            # The bill stays blocked until PayPal's own status, or the owner after checking PayPal, settles it.
                             continue
                     if batch_id:
                         self.store.x("UPDATE payouts SET batch_id=?, status='PENDING' WHERE sender_batch_id=?", (batch_id, p["sender_batch_id"]))
@@ -553,7 +560,7 @@ class Business:
                     try:
                         self._settle_bill(b, "PAYPAL", "PayPal payout", batch_id, from_status="processing")
                     except ValidationError:
-                        pass
+                        continue  # another thread settled it first: it already announced it
                     if announce or unclaimed:
                         self.store.alert(self.ws, "a_payout_unclaimed" if unclaimed else "a_payout_done", payee=b["payee"], amount=[b["amount"], b["currency"]])
                     self.log("bill_paid", f"Paid {b['payee']} {i18n.fmt_money(b['amount'], b['currency'])} with PayPal", "bill_paid_paypal", {"payee": b["payee"], "amount": [b["amount"], b["currency"]]}, bill_id=b["id"])

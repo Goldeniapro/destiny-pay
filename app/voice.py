@@ -25,6 +25,9 @@ FISH_URL = "https://api.fish.audio"
 SPEECH_LANG = {"es": "es", "en": "en", "pt": "pt"}
 
 
+AUDIO_CACHE_BYTES = 40 * 1024 * 1024  # repeated phrases only; keeps memory well under the instance limit
+
+
 class VoiceError(RuntimeError):
     pass
 
@@ -126,8 +129,8 @@ class Voice:
         if cache and chunks:
             with self._lock:
                 self._audio[key] = b"".join(chunks)
-                while len(self._audio) > 400:
-                    self._audio.popitem(last=False)
+                while len(self._audio) > 400 or sum(map(len, self._audio.values())) > AUDIO_CACHE_BYTES:
+                    self._audio.popitem(last=False)  # bounded by count and by size
 
     # --- speech-to-text ---------------------------------------------------------------
     def transcribe(self, audio: bytes, filename: str, mime: str, lang: str) -> str:

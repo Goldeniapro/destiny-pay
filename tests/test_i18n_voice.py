@@ -23,7 +23,15 @@ def test_every_text_exists_in_every_language():
 ])
 
 def test_yes_no_classifier(reply, verdict):
-    assert classify_reply(reply) == verdict
+    assert classify_reply(reply, "send_invoice") == verdict
+
+
+def test_security_audit_classifier_bypasses_are_closed():
+    c = classify_reply
+    assert c("Cancelar", "cancel_invoice") == "other" and c("cancel", "cancel_invoice") == "other"  # the deny button's label
+    assert c("cancela eso", "cancel_invoice") == "other" and c("sí, cancélala", "cancel_invoice") == "yes"
+    assert c("ok, pay them", "send_invoice") == "other" and c("sí, págale", "send_invoice") == "other"
+    assert c("yes send it", "pay_bill") == "other" and c("yes？", "pay_bill") == "other" and c("sí؟", "pay_bill") == "other"
 
 
 def test_cancel_words_confirm_only_a_cancellation():
@@ -123,3 +131,8 @@ def test_natural_commands_confirm_only_their_own_action():
     assert c("pay them", "pay_bill") == "yes" and c("págale nomás", "pay_bill") == "other"  # unknown word: ask again
     assert c("págale", "send_invoice") == "other" and c("envíala", "pay_bill") == "other"  # a verb for another action never confirms
     assert c("send it to another email", "send_invoice") == "other" and c("no la envíes", "send_invoice") == "no"
+
+
+def test_thanks_is_an_acknowledgement_not_an_approval():
+    assert classify_reply("ok thanks", "pay_bill") == "other" and classify_reply("listo, gracias", "pay_bill") == "other"
+    assert classify_reply("sí, por favor", "pay_bill") == "yes"

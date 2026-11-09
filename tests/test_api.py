@@ -114,7 +114,9 @@ def test_webhook_marks_invoice_paid(api, monkeypatch):
     monkeypatch.setattr(main, "DEMO_MODE", False)
     monkeypatch.setattr(main, "WEBHOOK_ID", "WH")
     monkeypatch.setattr(main.paypal, "verify_webhook", lambda h, e, w: True, raising=False)
-    cert = {"paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-1"}
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cert = {"paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-1", "paypal-transmission-time": now}
     event = {"id": "WH-EVT-1", "event_type": "INVOICING.INVOICE.PAID", "resource": {"invoice": {"id": inv["id"]}}}
     r = client.post("/api/paypal/webhook", json=event, headers=cert)
     assert r.status_code == 200 and biz.invoice_view(inv["id"])["status"] == "PAID"
@@ -122,6 +124,45 @@ def test_webhook_marks_invoice_paid(api, monkeypatch):
     assert again.status_code == 200 and again.json().get("duplicate") is True
     forged = client.post("/api/paypal/webhook", json={**event, "id": "WH-EVT-2"}, headers={"paypal-cert-url": "https://evil.example/cert"})
     assert forged.status_code == 400  # never even reaches PayPal's verify API
+    stale = client.post("/api/paypal/webhook", json={**event, "id": "WH-EVT-3"}, headers={**cert, "paypal-transmission-time": "2020-01-01T00:00:00Z"})
+    assert stale.status_code == 400  # replayed or forged delivery from long ago
+
+
+def test_webhook_failure_lets_paypal_retry(api, monkeypatch):
+    client, _ = api
+    from datetime import datetime, timezone
+    hdr = {"paypal-cert-url": "https://api.paypal.com/v1/notifications/certs/C", "paypal-transmission-time": datetime.now(timezone.utc).isoformat()}
+    monkeypatch.setattr(main, "DEMO_MODE", False)
+    monkeypatch.setattr(main, "WEBHOOK_ID", "WH")
+    monkeypatch.setattr(main.paypal, "verify_webhook", lambda h, e, w: True, raising=False)
+    calls = []
+    monkeypatch.setattr(main.store, "one", lambda *a, **k: calls.append(1) or (_ for _ in ()).throw(RuntimeError("db down")))
+    event = {"id": "WH-RETRY", "event_type": "INVOICING.INVOICE.PAID", "resource": {"invoice": {"id": "INV2-X"}}}
+    with pytest.raises(RuntimeError):
+        client.post("/api/paypal/webhook", json=event, headers=hdr)
+    assert not main._seen("WH-RETRY")  # the failed delivery was not recorded as handled
+
+
+def test_per_visitor_payout_and_token_allowances(api, monkeypatch):
+    client, _ = api
+    monkeypatch.setattr(main, "payouts_per_ip", main.AmountQuota(400))
+    ws = new_ws(client, sample=False)
+    biz = main.business_factory(ws)
+    a = biz.add_bill("A", "x", 300, biz.today().isoformat(), "none", "a@example.com")
+    b = biz.add_bill("B", "x", 300, biz.today().isoformat(), "none", "b@example.com")
+    ca = biz.request_confirmation("pay_bill", str(a["id"]))["confirmation_id"]
+    cb = biz.request_confirmation("pay_bill", str(b["id"]))["confirmation_id"]
+    body = {"workspace_id": ws, "conversation_id": "conv-quota", "approve": True, "lang": "es"}
+    assert client.post("/api/confirm", json={**body, "confirmation_id": ca}).status_code == 200
+    assert client.post("/api/confirm", json={**body, "confirmation_id": cb}).status_code == 429  # 600 > 400 for this visitor
+    assert biz.bill_view(b["id"])["status"] == "pending"
+
+
+def test_ipv6_visitors_counted_per_64(monkeypatch):
+    from starlette.requests import Request as R
+    monkeypatch.setattr(main, "CLIENT_IP_HEADER", "x-real-ip")
+    key = lambda ip: main.client_ip(R({"type": "http", "headers": [(b"x-real-ip", ip.encode())], "client": ("1.1.1.1", 1)}))
+    assert key("2001:db8:1:2::1") == key("2001:db8:1:2:ffff::9") != key("2001:db8:1:3::1")
 
 
 def test_security_headers_body_cap_and_no_docs(api):

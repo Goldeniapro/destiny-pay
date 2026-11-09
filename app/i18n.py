@@ -21,9 +21,9 @@ T: dict[str, dict[str, str]] = {
     "c_cancel_invoice": {"es": 'Listo, cancelé la factura de {name} por {total}.', "en": "Done, I cancelled {name}'s {total} invoice.", "pt": 'Pronto, cancelei a fatura de {name} de {total}.'},
     "c_pay_bill": {"es": 'Listo, le pagué {amount} a {payee} con PayPal.', "en": 'Done, I paid {payee} {amount} with PayPal.', "pt": 'Pronto, paguei {amount} a {payee} com PayPal.'},
     "c_pay_bill_pending": {"es": 'Listo, envié el pago de {amount} a {payee} con PayPal. Te aviso cuando PayPal lo confirme.', "en": "Done, I sent the {amount} payment to {payee} with PayPal. I'll tell you when PayPal confirms it.", "pt": 'Pronto, enviei o pagamento de {amount} a {payee} com PayPal. Aviso quando o PayPal confirmar.'},
-    "rb_send_invoice": {"es": 'Para confirmar: factura de {total} para {name}.', "en": 'To confirm: a {total} invoice for {name}.', "pt": 'Para confirmar: fatura de {total} para {name}.'},
-    "rb_cancel_invoice": {"es": 'Para confirmar: cancelar la factura de {total} de {name}.', "en": "To confirm: cancel {name}'s {total} invoice.", "pt": 'Para confirmar: cancelar a fatura de {total} de {name}.'},
-    "rb_pay_bill": {"es": 'Para confirmar: pagar {total} a {name}.', "en": 'To confirm: pay {name} {total}.', "pt": 'Para confirmar: pagar {total} a {name}.'},
+    "rb_send_invoice": {"es": 'Para confirmar: enviar la factura de {total} a {name}. Di «sí» o toca Confirmar.', "en": 'To confirm: send {name} the {total} invoice. Say “yes” or tap Confirm.', "pt": 'Para confirmar: enviar a fatura de {total} para {name}. Diga «sim» ou toque em Confirmar.'},
+    "rb_cancel_invoice": {"es": 'Para confirmar: cancelar la factura de {total} de {name}. Di «sí» o toca Confirmar.', "en": "To confirm: cancel {name}'s {total} invoice. Say “yes” or tap Confirm.", "pt": 'Para confirmar: cancelar a fatura de {total} de {name}. Diga «sim» ou toque em Confirmar.'},
+    "rb_pay_bill": {"es": 'Para confirmar: pagar {total} a {name} con PayPal. Di «sí» o toca Confirmar.', "en": 'To confirm: pay {name} {total} with PayPal. Say “yes” or tap Confirm.', "pt": 'Para confirmar: pagar {total} a {name} com PayPal. Diga «sim» ou toque em Confirmar.'},
     "multi_confirm": {"es": 'Preparé {n} operaciones. Por seguridad, confírmalas una por una con los botones de la pantalla.', "en": 'I prepared {n} operations. For safety, confirm them one by one with the buttons on screen.', "pt": 'Preparei {n} operações. Por segurança, confirme uma por uma com os botões da tela.'},
     "c_denied": {"es": 'Entendido, no lo hago.', "en": "Understood, I won't do it.", "pt": 'Entendido, não vou fazer.'},
     "c_failed": {"es": 'No pude hacerlo: {error}', "en": "I couldn't do it: {error}", "pt": 'Não consegui fazer: {error}'},
@@ -125,10 +125,9 @@ yes yeah yep yup sure confirm confirmed correct right perfect proceed absolutely
 sim pode confirmo confirmado confirma certo claro perfeito isso
 """.split())
 _FILLER_WORDS = set("""
-bueno pues que por favor envíala envíalo envíale envía envia envíalos mándala mándalo manda mandala mándale págale pagale paga págalo pagalo
-eso así de acuerdo gracias destiny hazlo porfa
-please send it pay them that's thats fine thanks great go do destiny now
-favor envia envie manda mande mandar paga pague enviar pagar obrigado obrigada agora pode
+bueno pues que por favor eso así de acuerdo destiny hazlo porfa
+please it them that's thats fine great go do destiny now
+favor agora pode
 """.split())
 _NO_WORDS = set("""
 no nop nope espera espérate espere todavía detente nunca alto cancela cancelar cancélala cancélalo cancelalo cancelala anula
@@ -141,6 +140,13 @@ _CANCEL_WORDS = {"cancela", "cancelar", "cancélala", "cancélalo", "cancelalo",
 _ACTION_YES = {
     "send_invoice": set("envíala envíalo envíale envía envia envíalos mándala mándalo manda mandala mándale mandar mande envie enviar send".split()),
     "pay_bill": set("págale pagale paga págalo pagalo pague pagar pay".split()),
+}
+# Action verbs are only ever accepted for their own action ("págale" never approves sending an invoice).
+_ACTION_WORDS = {
+    "send_invoice": _ACTION_YES["send_invoice"],
+    "pay_bill": _ACTION_YES["pay_bill"],
+    # "Cancelar" is also the label of the card's deny button: for a cancellation it is allowed next to a real
+    # yes ("sí, cancélala") but never enough on its own.
     "cancel_invoice": _CANCEL_WORDS,
 }
 
@@ -152,7 +158,7 @@ def _words(text: str) -> list[str]:
 def classify_reply(text: str, action: str = "") -> str:
     """'yes', 'no' or 'other' for a reply to a pending confirmation of `action`."""
     raw = text.strip().lower()
-    if not raw or "?" in raw or "¿" in raw or any(ch.isdigit() for ch in raw):
+    if not raw or any(q in raw for q in "?¿？؟⸮") or any(ch.isdigit() for ch in raw):
         return "other"
     words = _words(raw)
     if not words:
@@ -161,7 +167,7 @@ def classify_reply(text: str, action: str = "") -> str:
     if set(words) & negatives:
         return "no"
     yes_words = _YES_WORDS | _ACTION_YES.get(action, set())
-    allowed = yes_words | _FILLER_WORDS | (_CANCEL_WORDS if action == "cancel_invoice" else set())
+    allowed = yes_words | _FILLER_WORDS | _ACTION_WORDS.get(action, set())
     if len(words) <= 8 and all(w in allowed for w in words) and any(w in yes_words for w in words):
         return "yes"
     return "other"
