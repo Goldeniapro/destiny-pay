@@ -25,7 +25,7 @@ from .business import Business, ValidationError
 from .fake import FakePayPal
 from .i18n import LANGS
 from .paypal import UNPAID_STATUSES, PayPalClient, PayPalError
-from .seed import NAMES, seed_demo
+from .seed import NAMES, seed_demo, seed_invoices
 from .store import Store
 from .voice import Voice, VoiceError
 
@@ -302,7 +302,16 @@ def create_workspace(body: WorkspaceIn, request: Request):
     store.create_workspace(ws, NAMES.get(lang, NAMES["en"]), lang, tz, paypal.currency, body.sample)
     if body.sample:
         seed_demo(business_factory(ws), lang)
+        if not DEMO_MODE:  # real sandbox invoices take a few seconds: don't make the visitor wait for them
+            threading.Thread(target=_seed_invoices, args=(ws, lang), daemon=True, name="seed").start()
     return {"workspace_id": ws}
+
+
+def _seed_invoices(ws: str, lang: str) -> None:
+    try:
+        seed_invoices(business_factory(ws), lang)
+    except Exception:
+        log.warning("sample invoices could not be created on PayPal", exc_info=True)
 
 
 @app.get("/api/state")

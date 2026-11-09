@@ -105,7 +105,8 @@ class PayPalClient:
             raise PayPalError(f"PayPal {r.status_code}: {r.text[:400]}", body=r.text[:8000])
 
     # --- invoicing ----------------------------------------------------------
-    def create_invoice(self, recipient_name: str, recipient_email: str, items: list[dict], note: str = "", reference: str = "") -> dict:
+    def create_invoice(self, recipient_name: str, recipient_email: str, items: list[dict], note: str = "", reference: str = "",
+                       invoice_date: str = "", due_date: str = "", language: str = "") -> dict:
         """items: [{"name": str, "quantity": number, "unit_price": number}]
 
         The invoice number is left to PayPal, which auto-increments it: asking for the next number first
@@ -117,9 +118,12 @@ class PayPalClient:
                 "currency_code": self.currency,
                 "note": note or None,
                 "reference": reference or None,
+                "invoice_date": invoice_date or None,
+                "payment_term": {"term_type": "DUE_ON_DATE_SPECIFIED", "due_date": due_date} if due_date else None,
             },
             "primary_recipients": [
-                {"billing_info": {"name": {"given_name": given, "surname": surname or None}, "email_address": recipient_email}}
+                {"billing_info": {"name": {"given_name": given, "surname": surname or None}, "email_address": recipient_email,
+                                  "language": language or None}}  # e.g. "es-PE": the customer's PayPal email in the business's language
             ],
             "items": [
                 {

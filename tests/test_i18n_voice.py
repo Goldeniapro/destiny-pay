@@ -114,3 +114,11 @@ def test_amounts_are_spoken_naturally():
     assert spoken("Le pagué 1.900,00 USD a Marta.", "es") == "Le pagué 1.900 dólares a Marta."
     assert spoken("Paguei 2,50 USD a Textiles.", "pt") == "Paguei 2,50 dólares a Textiles."
     assert spoken("I paid 45.00 USD and 1,200.00 USD", "en") == "I paid 45 dollars and 1,200 dollars"
+
+
+def test_natural_commands_confirm_only_their_own_action():
+    from app.i18n import classify_reply as c
+    assert c("envíala", "send_invoice") == "yes" and c("send it", "send_invoice") == "yes" and c("sim, pode mandar", "send_invoice") == "yes"
+    assert c("pay them", "pay_bill") == "yes" and c("págale nomás", "pay_bill") == "other"  # unknown word: ask again
+    assert c("págale", "send_invoice") == "other" and c("envíala", "pay_bill") == "other"  # a verb for another action never confirms
+    assert c("send it to another email", "send_invoice") == "other" and c("no la envíes", "send_invoice") == "no"

@@ -154,3 +154,4 @@ footer { color:var(--muted); font-size:.78rem; padding:6px 0 28px; border-top:1p
 .aging-legend .item.zero { opacity:.55; }
 .aging-legend i { width:8px; height:8px; border-radius:50%; display:inline-block; }
 .aging-legend strong { color:var(--text); font-weight:650; font-variant-numeric:tabular-nums; }
+.chart-axis { display:flex; justify-content:space-between; font-size:.74rem; color:var(--muted); margin-top:6px; font-variant-numeric:tabular-nums; }

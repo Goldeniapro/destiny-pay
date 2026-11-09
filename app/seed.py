@@ -32,7 +32,7 @@ TEXT["pt"] = {"sarah": "Turista de Chicago; prefere inglês.", "lucho": "Cliente
                         "O aluguel é pago a Marta Quispe todo dia 5."],
               "sales": ["Suéter de alpaca", "Cachecol tecido", "Retábulo ayacuchano", "Brincos de prata", "Gorro chullo", "Manta andina"],
               "exp": [("Fio e tinturas", "supplies"), ("Táxi até o mercado", "transport"), ("Aluguel de outubro", "rent"), ("Anúncios nas redes", "marketing")]}
-INVOICE_ITEMS = {"es": ("Chompa de alpaca", "Retablo ayacuchano"), "en": ("Alpaca sweater", "Ayacucho altarpiece"), "pt": ("Suéter de alpaca", "Retábulo ayacuchano")}
+INVOICE_ITEMS = {"es": ("Manta andina", "Retablo ayacuchano"), "en": ("Andean blanket", "Ayacucho altarpiece"), "pt": ("Manta andina", "Retábulo ayacuchano")}
 
 
 def seed_demo(biz: Business, lang: str) -> None:
@@ -43,7 +43,7 @@ def seed_demo(biz: Business, lang: str) -> None:
     biz.save_contact("Textiles Andinos SAC", "pagos@textilesandinos.example.com", "supplier", tx["textiles"])
     biz.save_contact("Marta Quispe", "marta.quispe@example.com", "supplier", tx["marta"])
     biz.add_bill("Textiles Andinos SAC", tx["yarn"], 180, (today + timedelta(days=2)).isoformat(), "none", "pagos@textilesandinos.example.com")
-    biz.add_bill("Marta Quispe", tx["rent"], 300, (today + timedelta(days=5)).isoformat(), "monthly", "marta.quispe@example.com")
+    biz.add_bill("Marta Quispe", tx["rent"], 250, (today + timedelta(days=5)).isoformat(), "monthly", "marta.quispe@example.com")
     biz.add_bill("Movistar", tx["power"], 45, (today + timedelta(days=9)).isoformat(), "monthly", "")
     biz.add_bill("Empaques Lima", tx["bags"], 25, (today - timedelta(days=1)).isoformat(), "none", "")
     now = time.time()
@@ -58,11 +58,17 @@ def seed_demo(biz: Business, lang: str) -> None:
     biz.create_reminder(tx["call"], tomorrow_10.strftime("%Y-%m-%dT%H:%M"))
     for fact in tx["facts"]:
         biz.remember(fact)
-    if getattr(biz.paypal, "offline", False):  # offline demo only: never create sample invoices on a real PayPal account
-        sweater, retablo = INVOICE_ITEMS.get(lang, INVOICE_ITEMS["en"])
-        a = biz.draft_invoice("Sarah Miller", "sarah.miller@example.com", [{"name": sweater, "quantity": 2, "unit_price": 45}], "")
-        biz.send_invoice(a["id"])
-        b = biz.draft_invoice("Lucho Ramos", "lucho.ramos@example.com", [{"name": retablo, "quantity": 1, "unit_price": 120}], "")
-        biz.send_invoice(b["id"])
-        biz.store.x("UPDATE invoices SET due_date=? WHERE id=?", ((today - timedelta(days=12)).isoformat(), b["id"]))
+    if getattr(biz.paypal, "offline", False):  # offline demo: instant; on PayPal, seed_invoices runs in the background
+        seed_invoices(biz, lang, overdue=True)
     biz.log("demo", "Sample business loaded", "demo", {})
+
+
+def seed_invoices(biz: Business, lang: str, overdue: bool = False) -> None:
+    """Two open invoices so the sample business shows money owed from the first second (real ones on the PayPal sandbox)."""
+    blanket, retablo = INVOICE_ITEMS.get(lang, INVOICE_ITEMS["en"])
+    a = biz.draft_invoice("Hostal Killa", "reservas@hostalkilla.example.com", [{"name": blanket, "quantity": 5, "unit_price": 85}], "", due_in_days=6)
+    biz.send_invoice(a["id"])
+    b = biz.draft_invoice("Lucho Ramos", "lucho.ramos@example.com", [{"name": retablo, "quantity": 1, "unit_price": 120}], "", due_in_days=3)
+    biz.send_invoice(b["id"])
+    if overdue:  # offline demo only: show what an overdue invoice looks like
+        biz.store.x("UPDATE invoices SET due_date=? WHERE id=?", ((biz.today() - timedelta(days=12)).isoformat(), b["id"]))

@@ -71,7 +71,7 @@
     }
     return svg;
   }
-  const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const post = (path, body, ms) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, ms);
 
   // ---------- UI text ----------
   function applyTexts() {
@@ -315,7 +315,7 @@
     setState("thinking");
     let data;
     try {
-      data = await post("/api/chat", { workspace_id: ws, conversation_id: conv, message: text, lang, alternatives: (alts || []).slice(0, 3) });
+      data = await post("/api/chat", { workspace_id: ws, conversation_id: conv, message: text, lang, alternatives: (alts || []).slice(0, 3) }, 100000);  // the server always answers within about 95 s
     } catch (e) {
       data = { reply: t(e.status === 429 ? "rate" : e.status ? "server" : "offline"), error: "http" };
     }
@@ -412,10 +412,12 @@
 
   function renderKpis(o) {
     const box = $("kpis"); box.textContent = "";
-    const next = (o.next_bills || [])[0];
+    const today = o.today || "";
+    const next = (o.next_bills || []).find(b => b.due_date >= today);  // the next one still to come; overdue ones are shown apart
+    const lateSum = (o.bills_overdue || []).reduce((n, b) => n + b.amount, 0);
     box.append(
       kpi("inbox", t("kpi_receivable"), money(o.receivable), o.overdue_invoices.length ? t("overdue_n")(o.overdue_invoices.length) : t("open_n")(o.open_invoices), "", o.overdue_invoices.length ? "bad" : ""),
-      kpi("calendar", t("kpi_bills"), money(o.bills_next_7_days), next ? t("next_bill")(next.payee, fmtDate(next.due_date)) : "", "", o.bills_overdue.length ? "bad" : ""),
+      kpi("calendar", t("kpi_bills"), money(o.bills_next_7_days - lateSum), o.bills_overdue.length ? t("overdue_bills")(o.bills_overdue.length, money(lateSum)) : next ? t("next_bill")(next.payee, fmtDate(next.due_date)) : "", "", o.bills_overdue.length ? "bad" : ""),
       kpi("up", t("kpi_income"), money(o.income), t("net")(money(o.net)), "pos"),
       kpi("down", t("kpi_expense"), money(o.expense), o.top_expense_categories[0] ? `${t("cat")[o.top_expense_categories[0].category] || o.top_expense_categories[0].category} · ${money(o.top_expense_categories[0].amount)}` : ""),
       kpi("spark", t("kpi_proj"), money(o.projected_30_days), "", o.projected_30_days < 0 ? "neg" : "pos"),
@@ -461,6 +463,10 @@
     out += `<polyline points="${pts.join(" ")}" fill="none" stroke="var(--accent)" stroke-width="2"/>`;
     svg.innerHTML = out;
     svg.setAttribute("aria-label", t("chart_title"));
+    const axis = $("chart-axis"); axis.textContent = "";
+    if (days.length) for (const i of [0, Math.floor(days.length / 2), days.length - 1]) {
+      const l = document.createElement("span"); l.textContent = fmtShort(days[i].date); axis.appendChild(l);
+    }
   }
 
   // AG Grid tables
@@ -499,20 +505,21 @@
     const b = document.createElement("span"); b.textContent = [r.description, t("recurrence")[r.recurrence]].filter(Boolean).join(" · ");
     box.append(a, b); return box;
   }
+  const narrow = () => window.matchMedia && matchMedia("(max-width: 560px)").matches;  // phones: due date is in the briefing and KPIs
   function columns(name) {
     const m = p => p.value == null ? "" : money(p.value, p.data && p.data.currency);
     const d = p => fmtShort(p.value);
     if (name === "invoices") return [
-      { field: "customer", headerName: t("col_customer"), flex: 1.2, minWidth: 110 },
-      { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: 115, flex: 0.9 },
-      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 95, flex: 0.8 },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 125, flex: 1 },
-      { headerName: t("col_actions"), cellRenderer: invoiceActions, width: 230, sortable: false },
+      { field: "customer", headerName: t("col_customer"), flex: 1.3, minWidth: 110 },
+      { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: 105, flex: 0.9 },
+      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 88, flex: 0.7, hide: narrow() },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 110, flex: 0.9 },
+      { headerName: t("col_actions"), cellRenderer: invoiceActions, width: status && status.demo_mode ? 236 : 130, sortable: false },
     ];
     if (name === "bills") return [
       { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: 140, cellRenderer: twoLines },
       { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 112, flex: 0.9 },
-      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 104, flex: 0.8, sort: "asc" },
+      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 104, flex: 0.8, sort: "asc", hide: narrow() },
       { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 116, flex: 0.9 },
       { headerName: t("col_actions"), cellRenderer: billActions, width: 164, sortable: false },
     ];

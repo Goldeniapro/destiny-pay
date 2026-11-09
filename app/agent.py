@@ -24,6 +24,7 @@ from .paypal import PayPalError
 
 MODEL = "claude-opus-5-5"
 EFFORT = os.environ.get("DP_EFFORT", "low")  # short spoken replies; raise to "medium" if quality drops
+TURN_SECONDS = float(os.environ.get("DP_TURN_SECONDS", "35"))
 MAX_TURNS_PER_CONVERSATION = int(os.environ.get("DP_MAX_TURNS", "40"))
 DAILY_TOKEN_BUDGET = int(os.environ.get("DP_DAILY_TOKEN_BUDGET", "3000000"))
 
@@ -265,7 +266,7 @@ class DestinyPayAgent:
         if self._client is None:
             if not ai_configured():
                 raise anthropic.AnthropicError("ANTHROPIC_API_KEY is not set")
-            self._client = anthropic.Anthropic(max_retries=2, timeout=60)
+            self._client = anthropic.Anthropic(max_retries=1, timeout=30)  # worst case per call: 2 x 30 s
         return self._client
 
     def _system(self, conv: Conversation, biz: Business) -> str:
@@ -386,7 +387,10 @@ class DestinyPayAgent:
                 messages.append({"role": "assistant", "content": [{"type": "text", "text": note}]})
             return {"reply": t("partial", lang), "actions": actions, "ui": ui, "error": key}
 
+        deadline = time.monotonic() + TURN_SECONDS  # no new step after 35 s; with 60 s per call at worst, the reply lands before the browser gives up at 100 s
         for _ in range(self.max_steps):
+            if time.monotonic() > deadline:
+                return fail("steps")
             try:
                 response = self.client.beta.messages.create(
                     model=MODEL,

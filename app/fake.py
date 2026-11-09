@@ -56,7 +56,7 @@ class FakePayPal:
             raise PayPalError("PayPal 404: INVOICE_NOT_FOUND")
         return inv
 
-    def create_invoice(self, recipient_name, recipient_email, items, note="", reference=""):
+    def create_invoice(self, recipient_name, recipient_email, items, note="", reference="", invoice_date="", due_date="", language=""):
         n = self._next()
         total = sum(float(i["quantity"]) * float(i["unit_price"]) for i in items)
         given, _, surname = recipient_name.partition(" ")

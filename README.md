@@ -11,8 +11,8 @@ Micro and small businesses are about 99% of all companies in Latin America ([CEP
 1. Open the live demo (Chrome, Edge or Safari). You get your own **sample business**, "Inti Crafts", with customers, suppliers, bills and a month of sales already in memory.
 2. Listen to the **daily briefing**: what you're owed, what's overdue, what you must pay this week.
 3. Tap 🎙️ and say *"Bill Sarah Miller for two alpaca sweaters at 45 dollars"*. Destiny Pay already knows Sarah's email, drafts the PayPal invoice and shows a **confirmation card**. Say **"yes"** or press Confirm: the invoice goes out with its payment link.
-4. Say *"Show me the QR"*, then pay as the customer (sandbox buyer account in the Devpost testing notes). Destiny Pay **announces the payment out loud** within seconds.
-5. Say *"Pay Textiles Andinos with PayPal"*: a card shows payee, email and amount; on your yes, a **PayPal Payout** pays the supplier. The bill is marked paid only when PayPal confirms the payout (a failed or returned payout puts it back to pending and tells you), and the next one is scheduled if it's recurring.
+4. Say *"Show me the QR"*, then pay as the customer (sandbox buyer account in the Devpost testing notes). Destiny Pay **announces the payment out loud** (instantly with PayPal webhooks, otherwise within about half a minute).
+5. Say *"Pay Textiles Andinos with PayPal"*: a card shows payee, email and amount; on your yes, a **PayPal Payout** pays the supplier. The bill is marked paid only when PayPal accepts the payout: completed, or unclaimed (the money left your balance and waits for the supplier, who gets a follow-up). A failed or returned payout puts the bill back to pending, undoes the expense and tells you; the next one is scheduled if it's recurring.
 6. Ask *"How is my business doing this month?"* or *"What should I pay first?"* for grounded, conservative advice.
 7. Close the tab and come back tomorrow: **it remembers everything.**
 

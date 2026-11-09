@@ -211,9 +211,11 @@ class Business:
             return {**self.invoice_view(recent["id"]), "duplicate_of": recent["id"],
                     "message": "An identical draft was just created; reuse it instead of creating another."}
         trust = i18n.t("trust_note", self.info.get("lang") or "en", business=self.info["name"])
-        inv = self.paypal.create_invoice(name, email, clean, (_clean(note, 500) + "\n\n" + trust).strip(), reference=f"dp-{_tag(self.ws)}")
-        prev_max = self.store.one("SELECT COALESCE(MAX(total),0) m FROM invoices WHERE ws=? AND status NOT IN ('DRAFT','CANCELLED')", (self.ws,))["m"]
         due_date = (self.today() + timedelta(days=max(0, min(int(due_in_days or 7), 90)))).isoformat()
+        inv = self.paypal.create_invoice(name, email, clean, (_clean(note, 500) + "\n\n" + trust).strip(), reference=f"dp-{_tag(self.ws)}",
+                                         due_date=due_date,  # no invoice_date: PayPal's own "today" (ours can be its tomorrow -> SCHEDULED)
+                                         language={"es": "es-PE", "en": "en-US", "pt": "pt-BR"}.get(self.info.get("lang") or "", ""))
+        prev_max = self.store.one("SELECT COALESCE(MAX(total),0) m FROM invoices WHERE ws=? AND status NOT IN ('DRAFT','CANCELLED')", (self.ws,))["m"]
         now = time.time()
         self.store.x("INSERT INTO invoices(id,ws,contact,status,total,due,currency,due_date,summary,created_at,updated_at,refreshed_at) "
                      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",

@@ -128,7 +128,7 @@ _FILLER_WORDS = set("""
 bueno pues que por favor envíala envíalo envíale envía envia envíalos mándala mándalo manda mandala mándale págale pagale paga págalo pagalo
 eso así de acuerdo gracias destiny hazlo porfa
 please send it pay them that's thats fine thanks great go do destiny now
-favor envia envie manda mande paga pague enviar pagar obrigado obrigada agora
+favor envia envie manda mande mandar paga pague enviar pagar obrigado obrigada agora pode
 """.split())
 _NO_WORDS = set("""
 no nop nope espera espérate espere todavía detente nunca alto cancela cancelar cancélala cancélalo cancelalo cancelala anula
@@ -136,6 +136,13 @@ not don't dont wait stop never hold cancel cancelled
 não nao pare ainda nunca cancele cancelar
 """.split())
 _CANCEL_WORDS = {"cancela", "cancelar", "cancélala", "cancélalo", "cancelalo", "cancelala", "anula", "cancel", "cancele"}
+# A bare command that names the very action being confirmed is a yes ("envíala", "send it", "pay them", "pode mandar"),
+# but only for that action: "págale" never approves sending an invoice.
+_ACTION_YES = {
+    "send_invoice": set("envíala envíalo envíale envía envia envíalos mándala mándalo manda mandala mándale mandar mande envie enviar send".split()),
+    "pay_bill": set("págale pagale paga págalo pagalo pague pagar pay".split()),
+    "cancel_invoice": _CANCEL_WORDS,
+}
 
 
 def _words(text: str) -> list[str]:
@@ -153,7 +160,8 @@ def classify_reply(text: str, action: str = "") -> str:
     negatives = _NO_WORDS - (_CANCEL_WORDS if action == "cancel_invoice" else set())
     if set(words) & negatives:
         return "no"
-    allowed = _YES_WORDS | _FILLER_WORDS | (_CANCEL_WORDS if action == "cancel_invoice" else set())
-    if len(words) <= 8 and all(w in allowed for w in words) and any(w in _YES_WORDS for w in words):
+    yes_words = _YES_WORDS | _ACTION_YES.get(action, set())
+    allowed = yes_words | _FILLER_WORDS | (_CANCEL_WORDS if action == "cancel_invoice" else set())
+    if len(words) <= 8 and all(w in allowed for w in words) and any(w in yes_words for w in words):
         return "yes"
     return "other"

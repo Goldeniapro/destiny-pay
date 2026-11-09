@@ -44,7 +44,7 @@ def test_workspace_state_and_briefing(api):
     client, _ = api
     ws = new_ws(client, "en")
     st = client.get("/api/state", params={"ws": ws, "lang": "en"}).json()
-    assert st["business"]["name"] == "Inti Crafts" and len(st["bills"]) == 4 and len(st["contacts"]) == 4
+    assert st["business"]["name"] == "Inti Crafts" and len(st["bills"]) == 4 and len(st["contacts"]) == 5 and st["overview"]["receivable"] == 545 and st["overview"]["projected_30_days"] == 45
     assert len(st["cashflow"]) == 30 and st["overview"]["bills_next_7_days"] > 0
     b = client.get("/api/briefing", params={"ws": ws, "lang": "en"}).json()
     assert "Textiles Andinos" in b["text"] and "overdue bill: Empaques Lima" in b["text"] and b["speech_id"] is None  # no voice key: the browser speaks
