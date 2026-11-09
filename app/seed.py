@@ -14,14 +14,14 @@ TEXT = {
            "marta": "Dueña del local.", "yarn": "Pedido de hilo de alpaca", "rent": "Alquiler del local", "power": "Internet y luz",
            "bags": "Bolsas y empaques", "call": "Llamar a Textiles Andinos para el nuevo pedido",
            "facts": ["Sarah Miller vuelve a Chicago el 20 de noviembre.", "Los turistas suelen pagar con PayPal; los clientes locales con Yape.",
-                     "El alquiler se paga a Marta Quispe los días 5."],
+                     "El alquiler se paga a Marta Quispe los días {day} de cada mes."],
            "sales": ["Chompa de alpaca", "Chalina tejida", "Retablo ayacuchano", "Aretes de plata", "Gorro chullo", "Manta andina"],
            "exp": [("Hilo y tintes", "supplies"), ("Taxi al mercado", "transport"), ("Alquiler de octubre", "rent"), ("Publicidad en redes", "marketing")]},
     "en": {"sarah": "Tourist from Chicago; prefers English.", "lucho": "Local customer; pays with Yape.", "textiles": "Alpaca yarn supplier.",
            "marta": "Shop landlord.", "yarn": "Alpaca yarn order", "rent": "Shop rent", "power": "Internet and power",
            "bags": "Bags and packaging", "call": "Call Textiles Andinos about the new order",
            "facts": ["Sarah Miller flies back to Chicago on November 20.", "Tourists usually pay with PayPal; local customers with Yape.",
-                     "Rent is paid to Marta Quispe on the 5th of each month."],
+                     "Rent is paid to Marta Quispe on day {day} of each month."],
            "sales": ["Alpaca sweater", "Woven scarf", "Ayacucho altarpiece", "Silver earrings", "Chullo hat", "Andean blanket"],
            "exp": [("Yarn and dyes", "supplies"), ("Taxi to the market", "transport"), ("October rent", "rent"), ("Social media ads", "marketing")]},
 }
@@ -29,7 +29,7 @@ TEXT["pt"] = {"sarah": "Turista de Chicago; prefere inglês.", "lucho": "Cliente
               "marta": "Dona da loja.", "yarn": "Pedido de fio de alpaca", "rent": "Aluguel da loja", "power": "Internet e luz",
               "bags": "Sacolas e embalagens", "call": "Ligar para a Textiles Andinos sobre o novo pedido",
               "facts": ["Sarah Miller volta para Chicago em 20 de novembro.", "Turistas costumam pagar com PayPal; clientes locais com Yape.",
-                        "O aluguel é pago a Marta Quispe todo dia 5."],
+                        "O aluguel é pago a Marta Quispe todo dia {day}."],
               "sales": ["Suéter de alpaca", "Cachecol tecido", "Retábulo ayacuchano", "Brincos de prata", "Gorro chullo", "Manta andina"],
               "exp": [("Fio e tinturas", "supplies"), ("Táxi até o mercado", "transport"), ("Aluguel de outubro", "rent"), ("Anúncios nas redes", "marketing")]}
 INVOICE_ITEMS = {"es": ("Manta andina", "Retablo ayacuchano"), "en": ("Andean blanket", "Ayacucho altarpiece"), "pt": ("Manta andina", "Retábulo ayacuchano")}
@@ -57,7 +57,7 @@ def seed_demo(biz: Business, lang: str) -> None:
     tomorrow_10 = datetime.combine(today + timedelta(days=1), datetime.min.time()).replace(hour=10)
     biz.create_reminder(tx["call"], tomorrow_10.strftime("%Y-%m-%dT%H:%M"))
     for fact in tx["facts"]:
-        biz.remember(fact)
+        biz.remember(fact.format(day=(today + timedelta(days=5)).day))  # matches the rent bill's due date
     if getattr(biz.paypal, "offline", False):  # offline demo: instant; on PayPal, seed_invoices runs in the background
         seed_invoices(biz, lang, overdue=True)
     biz.log("demo", "Sample business loaded", "demo", {})
