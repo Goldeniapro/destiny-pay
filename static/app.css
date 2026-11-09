@@ -100,3 +100,4 @@ dialog#qr img{width:240px;height:240px;image-rendering:pixelated;border-radius:1
 @media(max-width:710px){.chat-log{max-height:300px}.grid{height:420px}.auth-card{grid-template-columns:auto 1fr}.auth-card .ac-amount{grid-column:2}}
 .workspace-environment{white-space:nowrap}
 @media(max-width:480px){.sandbox-pill{display:none}.workspace-environment{display:none}.header-tool{width:34px;height:34px}.nav-controls{gap:8px}}
+.chat-log{-webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 18px);mask-image:linear-gradient(to bottom,transparent 0,#000 18px);padding-top:14px}
