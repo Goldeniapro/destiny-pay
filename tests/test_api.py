@@ -43,13 +43,15 @@ def test_status_and_page(api):
 def test_workspace_state_and_briefing(api):
     client, _ = api
     ws = new_ws(client, "en")
-    st = client.get("/api/state", params={"ws": ws, "lang": "en"}).json()
+    st = client.get("/api/state", params={"lang": "en"}, headers={"x-workspace": ws}).json()
     assert st["business"]["name"] == "Inti Crafts" and len(st["bills"]) == 4 and len(st["contacts"]) == 5 and st["overview"]["receivable"] == 545 and st["overview"]["projected_30_days"] == 45
     assert len(st["cashflow"]) == 30 and st["overview"]["bills_next_7_days"] > 0
-    b = client.get("/api/briefing", params={"ws": ws, "lang": "en"}).json()
+    b = client.get("/api/briefing", params={"lang": "en"}, headers={"x-workspace": ws}).json()
     assert "Textiles Andinos" in b["text"] and "overdue bill: Empaques Lima" in b["text"] and b["speech_id"] is None  # no voice key: the browser speaks
-    assert client.get("/api/state", params={"ws": "0" * 32}).status_code == 404
-    assert client.get("/api/state", params={"ws": "not-a-workspace"}).status_code == 422
+    assert client.get("/api/state", headers={"x-workspace": "0" * 32}).status_code == 404
+    bad = client.get("/api/state", headers={"x-workspace": "not-a-workspace"})
+    assert bad.status_code == 422 and "not-a-workspace" not in bad.text  # errors never echo the input
+    assert "strict-transport-security" in bad.headers
 
 
 def test_chat_confirm_and_alerts(api):
@@ -62,22 +64,22 @@ def test_chat_confirm_and_alerts(api):
                                 text("¿Confirmas?")]
     r = client.post("/api/chat", json={"workspace_id": ws, "conversation_id": "conv-api-1", "message": "envíale la factura a Sarah", "lang": "es"}).json()
     cid = r["ui"][0]["confirmation"]["confirmation_id"]
-    st = client.get("/api/state", params={"ws": ws}).json()
+    st = client.get("/api/state", headers={"x-workspace": ws}).json()
     assert st["confirmations"][0]["id"] == cid
     c = client.post("/api/confirm", json={"workspace_id": ws, "conversation_id": "conv-api-1", "confirmation_id": cid, "approve": True, "lang": "es"}).json()
     assert c["done"] and "Sarah Miller" in c["reply"]
-    assert client.post(f"/api/demo/pay/{inv['id']}", params={"ws": ws}).status_code == 200
-    st = client.get("/api/state", params={"ws": ws, "lang": "es", "since": 0}).json()
+    assert client.post(f"/api/demo/pay/{inv['id']}", headers={"x-workspace": ws}).status_code == 200
+    st = client.get("/api/state", params={"lang": "es", "since": 0}, headers={"x-workspace": ws}).json()
     assert st["alerts"][-1]["text"].startswith("¡Sarah Miller te pagó")
-    assert client.get("/api/state", params={"ws": ws, "since": st["last_alert_id"]}).json()["alerts"] == []
+    assert client.get("/api/state", params={"since": st["last_alert_id"]}, headers={"x-workspace": ws}).json()["alerts"] == []
 
 
 def test_isolation_between_workspaces(api):
     client, _ = api
     a, b = new_ws(client, sample=False), new_ws(client, sample=False)
     inv = main.business_factory(a).draft_invoice("Ana", "ana@example.com", [{"name": "x", "quantity": 1, "unit_price": 5}], "")
-    assert client.post(f"/api/demo/pay/{inv['id']}", params={"ws": b}).status_code == 404
-    assert client.get("/api/state", params={"ws": b}).json()["invoices"] == []
+    assert client.post(f"/api/demo/pay/{inv['id']}", headers={"x-workspace": b}).status_code == 404
+    assert client.get("/api/state", headers={"x-workspace": b}).json()["invoices"] == []
 
 
 def test_validation_and_limits(api, monkeypatch):
@@ -185,8 +187,8 @@ def test_scheduler_tick_fires_reminders_and_refreshes(api):
 def test_activity_log_follows_language(api):
     client, _ = api
     ws = new_ws(client, "es")
-    es = client.get("/api/state", params={"ws": ws, "lang": "es"}).json()["activity"]
-    en = client.get("/api/state", params={"ws": ws, "lang": "en"}).json()["activity"]
-    pt = client.get("/api/state", params={"ws": ws, "lang": "pt"}).json()["activity"]
+    es = client.get("/api/state", params={"lang": "es"}, headers={"x-workspace": ws}).json()["activity"]
+    en = client.get("/api/state", params={"lang": "en"}, headers={"x-workspace": ws}).json()["activity"]
+    pt = client.get("/api/state", params={"lang": "pt"}, headers={"x-workspace": ws}).json()["activity"]
     assert es[0]["text"] == "Negocio de ejemplo cargado" and en[0]["text"] == "Sample business loaded" and pt[0]["text"] == "Negócio de exemplo carregado"
     assert any(a["text"].startswith("Cuenta por pagar: Textiles Andinos SAC 180,00 USD") for a in es)

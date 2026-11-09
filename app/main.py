@@ -12,10 +12,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -114,7 +115,7 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 SECURITY_HEADERS = [
     (b"content-security-policy", CSP.encode()), (b"x-content-type-options", b"nosniff"), (b"referrer-policy", b"no-referrer"),
     (b"x-frame-options", b"DENY"), (b"permissions-policy", b"microphone=(self), camera=(), geolocation=()"),
-    (b"cross-origin-opener-policy", b"same-origin"),
+    (b"cross-origin-opener-policy", b"same-origin"), (b"strict-transport-security", b"max-age=63072000; includeSubDomains"),
 ]
 
 
@@ -153,6 +154,12 @@ class GuardMiddleware:
     async def _reject(send):
         await send({"type": "http.response.start", "status": 413, "headers": [(b"content-type", b"application/json"), *SECURITY_HEADERS]})
         await send({"type": "http.response.body", "body": b'{"detail":"Request too large"}'})
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(_request: Request, exc: RequestValidationError):
+    # Say which field is wrong, never echo what was sent (it can be long or contain personal data).
+    return JSONResponse(status_code=422, content={"detail": [{"loc": list(e.get("loc", [])), "msg": e.get("msg", "")} for e in exc.errors()]})
 
 
 app.add_middleware(GZipMiddleware, minimum_size=1024)
@@ -325,7 +332,7 @@ def _seed_invoices(ws: str, lang: str) -> None:
 
 
 @app.get("/api/state")
-def state(request: Request, ws: str = Query(**WS_ID), lang: str = "es", since: int = 0):
+def state(request: Request, ws: str = Header(alias="x-workspace", **WS_ID), lang: str = "es", since: int = 0):
     limit(request, "state", "state_ws", ws=ws)
     biz = open_business(ws)
     lang = lang_of(lang)
@@ -368,7 +375,7 @@ def render_activity(row: dict, lang: str) -> dict:
 
 
 @app.get("/api/briefing")
-def briefing(request: Request, ws: str = Query(**WS_ID), lang: str = "es"):
+def briefing(request: Request, ws: str = Header(alias="x-workspace", **WS_ID), lang: str = "es"):
     limit(request, "state")
     biz = open_business(ws)
     text = biz.briefing(lang_of(lang))
@@ -513,7 +520,7 @@ def _handle_webhook(headers: dict, event: dict) -> dict:
 
 # --- demo helper ----------------------------------------------------------------------------------
 @app.post("/api/demo/pay/{invoice_id}")
-def demo_pay(invoice_id: str, request: Request, ws: str = Query(**WS_ID)):
+def demo_pay(invoice_id: str, request: Request, ws: str = Header(alias="x-workspace", **WS_ID)):
     """Demo mode only: simulate the customer paying online, so the 'payment received' flow can be tried."""
     limit(request, "chat")
     if not DEMO_MODE:

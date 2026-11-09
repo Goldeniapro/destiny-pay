@@ -47,7 +47,9 @@
     return o;
   };
   async function api(path, opts, ms) {
-    const r = await fetch(path, withTimeout(opts, ms || 45000));
+    const o = Object.assign({}, opts || {});
+    if (ws) o.headers = Object.assign({ "X-Workspace": ws }, o.headers || {});  // the business id never goes in a URL (logs, history)
+    const r = await fetch(path, withTimeout(o, ms || 45000));
     if (!r.ok) { const e = new Error("http " + r.status); e.status = r.status; throw e; }
     return r.json();
   }
@@ -488,7 +490,7 @@
     if (r.payer_link) { const a = document.createElement("a"); a.className = "cell-btn"; a.href = r.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; a.textContent = t("pay_link"); box.appendChild(a); }
     if (status && status.demo_mode && OPEN.has(r.status)) {
       const b = document.createElement("button"); b.className = "cell-btn"; b.type = "button"; b.textContent = t("simulate");
-      b.addEventListener("click", async () => { b.disabled = true; try { await api(`/api/demo/pay/${encodeURIComponent(r.id)}?ws=${ws}`, { method: "POST" }); } catch (e) { /* refresh shows it */ } refresh(); });
+      b.addEventListener("click", async () => { b.disabled = true; try { await api(`/api/demo/pay/${encodeURIComponent(r.id)}`, { method: "POST" }); } catch (e) { /* refresh shows it */ } refresh(); });
       box.appendChild(b);
     }
     return box;
@@ -579,7 +581,7 @@
     refreshing = true;
     const myEpoch = epoch;
     try {
-      const s = await api(`/api/state?ws=${ws}&lang=${lang}&since=${lastAlert}`, undefined, 15000);
+      const s = await api(`/api/state?lang=${lang}&since=${lastAlert}`, undefined, 15000);
       if (myEpoch !== epoch) { again = true; return; }  // a chat or confirmation happened meanwhile: this snapshot is stale
       render(s);
       if (!firstLoad) for (const a of s.alerts) { add("bot alert", a.text); sayWhenIdle(a.text, a.speech_id); }
@@ -617,7 +619,7 @@
   }
   async function briefing() {
     try {
-      const b = await api(`/api/briefing?ws=${ws}&lang=${lang}`);
+      const b = await api(`/api/briefing?lang=${lang}`);
       const d = add("bot brief", b.text);
       const play = document.createElement("button"); play.className = "play"; play.type = "button"; play.append(icon("play"), t("play_brief"));
       play.addEventListener("click", () => { unlockAudio(); speak(b.text, b.speech_id); });
