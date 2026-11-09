@@ -46,7 +46,7 @@ DICTATION: speech recognition writes emails as words; convert "arroba/at" to "@"
 ACTIONS THAT NEED THE OWNER'S CONFIRMATION (enforced by the app, not by you):
 - To charge: draft_invoice first, then request_send_invoice.
 - To cancel an invoice: request_cancel_invoice. To pay a supplier through PayPal: request_pay_bill.
-These tools only create a confirmation card. Then read back the details (customer or payee, each item with quantity and unit price, the total, and the email, spelling the part before the @). Do not ask the confirmation question yourself: the app appends its own fixed confirmation line (amount, who, "say yes or tap Authorize") right after your reply. The app executes the action itself when the owner presses Confirm or answers yes; you will see that in the conversation. Never say it was sent or paid before that. If the owner wants a change, create a new draft.
+These tools only create a confirmation card. Then read back the details (customer or payee, each item with quantity and unit price, the total, and the email, spelling the part before the @). Do not ask the confirmation question yourself: the app appends its own fixed confirmation line (amount, who, email, "say yes or tap Authorize") right after your reply. The app executes the action itself when the owner presses Authorize or answers yes; you will see that in the conversation. Never say it was sent or paid before that. If the owner wants a change, create a new draft.
 
 OTHER REQUESTS:
 - "Who owes me?" list_invoices with status unpaid (or overdue). "Did X pay?" get_invoice.
@@ -321,7 +321,7 @@ class DestinyPayAgent:
             try:
                 if conv.awaiting == confirmation_id:
                     conv.awaiting = ""
-                self._note(conv, biz, f"[The owner pressed {'Confirm' if approve else 'Cancel'} on the card]", reply)
+                self._note(conv, biz, f"[The owner pressed {'Authorize' if approve else 'Reject'} in the authorization dialog]", reply)
             finally:
                 conv.lock.release()
         return {"done": done, "reply": reply}
@@ -335,7 +335,7 @@ class DestinyPayAgent:
         conv.messages.append({"role": "assistant", "content": [{"type": "text", "text": reply}]})
 
     @staticmethod
-    def _arm_voice_yes(conv: Conversation, reply: str, asked_now: list[dict]) -> str:
+    def _arm_voice_yes(conv: Conversation, reply: str, asked_now: list[dict], turn_started: float = 0.0) -> str:
         """Decide what a spoken "yes" will mean in the next message, in code, never in the model.
 
         One confirmation: a "yes" approves it, and the reply must state its amount (else code reads it back).
@@ -355,7 +355,11 @@ class DestinyPayAgent:
             return reply
         # Always the code's own words, whatever the model said: a "yes" can only approve exactly what was read here.
         money = fmt_money(amount, d.get("currency", ""), conv.lang)
-        return f"{reply} {t(key, conv.lang, name=d.get('customer') or d.get('payee') or '', total=money)}"
+        readback = t(key, conv.lang, name=d.get('customer') or d.get('payee') or '', total=money, email=d.get('email') or '')
+        if c.get("action") == "pay_bill" and (d.get("created_at") or 0) >= turn_started:
+            conv.awaiting = ""  # a payee written down in this same turn: only the on-screen dialog can approve it
+            return f"{reply} {t('button_only', conv.lang)}"
+        return f"{reply} {readback}"
 
     # --- the loop ----------------------------------------------------------------------
     def _user_content(self, conv: Conversation, biz: Business, text: str, alternatives: list[str]) -> list[dict]:
@@ -372,6 +376,7 @@ class DestinyPayAgent:
     def _run(self, conv: Conversation, biz: Business, conversation_id: str, user_text: str, alternatives: list[str]) -> dict:
         lang, messages = conv.lang, conv.messages
         start = len(messages)
+        turn_started = time.time()
         conv.spent = 0
         messages.append({"role": "user", "content": self._user_content(conv, biz, user_text, alternatives)})
         actions: list[dict] = []
@@ -428,7 +433,7 @@ class DestinyPayAgent:
                 text = " ".join(b.text for b in content if b.type == "text").strip()
                 reply = text or t("done", lang)
                 messages.append({"role": "assistant", "content": content if text else [*content, {"type": "text", "text": reply}]})
-                return {"reply": self._arm_voice_yes(conv, reply, asked_now), "actions": actions, "ui": ui}
+                return {"reply": self._arm_voice_yes(conv, reply, asked_now, turn_started), "actions": actions, "ui": ui}
 
             messages.append({"role": "assistant", "content": content})
             results = []

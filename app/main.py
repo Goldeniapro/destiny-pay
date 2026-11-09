@@ -428,7 +428,7 @@ def readback(conf: dict, lang: str) -> str:
     amount = d.get("total", d.get("amount"))
     if not key or amount is None:
         return ""
-    return i18n.t(key, lang, name=d.get("customer") or d.get("payee") or "", total=i18n.fmt_money(amount, d.get("currency", ""), lang))
+    return i18n.t(key, lang, name=d.get("customer") or d.get("payee") or "", total=i18n.fmt_money(amount, d.get("currency", ""), lang), email=d.get("email") or "")
 
 
 @app.get("/api/confirmation/{cid}/readback")
@@ -514,12 +514,13 @@ def confirm(body: ConfirmIn, request: Request):
     biz = open_business(body.workspace_id)
     if body.approve and not body.fingerprint:
         raise HTTPException(400, "An approval must name the exact operation it approves")
-    if body.approve:
-        conf = next((c for c in biz.pending_confirmations() if c["id"] == body.confirmation_id), None)
-        if conf and conf["kind"] == "pay_bill":
-            charge_payout(client_ip(request), conf)
+    conf = next((c for c in biz.pending_confirmations() if c["id"] == body.confirmation_id), None) if body.approve else None
+    if conf and conf["kind"] == "pay_bill":
+        charge_payout(client_ip(request), conf)
     res = agent.confirm(body.workspace_id, body.conversation_id, body.confirmation_id, body.approve, lang_of(body.lang),
                         body.fingerprint if body.approve else None)
+    if conf and conf["kind"] == "pay_bill" and not res.get("done"):
+        payouts_per_ip.charge(client_ip(request), -float((conf.get("details") or {}).get("amount") or 0))  # nothing paid: give it back
     res["speech_id"] = voice.register(res["reply"], lang_of(body.lang))
     return res
 

@@ -331,8 +331,8 @@
     if (data.error === "conversation_full") newConversation(true);
     busy = false;
     speak(reply, data.speech_id);
+    if (newAuth) wantOpen = newAuth;  // the review dialog is the visible gate: opened as soon as the card is rendered
     await refresh();
-    if (newAuth) openAuthById(newAuth);  // the review dialog is the visible gate
   }
   $("f").addEventListener("submit", e => { e.preventDefault(); const text = input.value; cancelListening(); send(text); });
   $$("#chips .prompt-chip").forEach(b => b.addEventListener("click", () => { cancelListening(); send(u(b.dataset.cmd)); }));
@@ -401,12 +401,14 @@
     fillModal(c);
     $("reviewCheckbox").checked = false; $("confirmApproval").disabled = true; $("rejectApproval").disabled = false;
     $("approvalBackdrop").hidden = false; document.body.classList.add("modal-open");
+    document.querySelector(".site").inert = true;
     $("closeModal").focus();
   }
-  function openAuthById(id) { const c = pending.find(x => x.id === id); if (c) openModal(c); }
+  let wantOpen = null;
   function closeModal() {
     if ($("approvalBackdrop").hidden) return;
     $("approvalBackdrop").hidden = true; document.body.classList.remove("modal-open"); modalConf = null;
+    document.querySelector(".site").inert = false;
     if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
   }
   async function decide(approve) {
@@ -417,7 +419,7 @@
     try {
       const body = { workspace_id: ws, conversation_id: conv, confirmation_id: c.id, approve, lang };
       if (approve) body.fingerprint = c.fingerprint;  // approves this exact operation and nothing else
-      const r = await post("/api/confirm", body);
+      const r = await post("/api/confirm", body, 100000);  // a payout can wait on PayPal's retries
       epoch++;
       closeModal();
       add(r.done ? "bot alert" : "bot", r.reply);
@@ -474,9 +476,10 @@
     const box = $("metrics"); box.textContent = "";
     const lateSum = (o.bills_overdue || []).reduce((n, b) => n + b.amount, 0);
     const top = o.top_expense_categories && o.top_expense_categories[0];
+    const next = (o.next_bills || []).find(b => b.due_date >= (o.today || ""));
     box.append(
       metric(t("kpi_receivable"), "receipt", o.receivable, o.overdue_invoices.length ? t("overdue_n")(o.overdue_invoices.length) : t("open_n")(o.open_invoices), o.overdue_invoices.length ? "metric-alert" : ""),
-      metric(t("kpi_bills"), "wallet", o.bills_next_7_days - lateSum, o.bills_overdue.length ? t("overdue_bills")(o.bills_overdue.length, money(lateSum)) : "", o.bills_overdue.length ? "metric-alert" : ""),
+      metric(t("kpi_bills"), "wallet", o.bills_next_7_days - lateSum, o.bills_overdue.length ? t("overdue_bills")(o.bills_overdue.length, money(lateSum)) : (next ? t("next_bill")(next.payee, fmtShort(next.due_date)) : ""), o.bills_overdue.length ? "metric-alert" : ""),
       metric(t("kpi_income"), "arrowup", o.income, t("net")(money(o.net))),
       metric(t("kpi_expense"), "chart", o.expense, top ? u("metricExpensesTop", { cat: t("cat")[top.category] || top.category, amount: money(top.amount) }) : ""),
     );
@@ -627,20 +630,21 @@
     box.append(el("strong", "", r.payee), el("span", "", [r.description, t("recurrence")[r.recurrence]].filter(Boolean).join(" · ")));
     return box;
   }
+  const narrow = () => window.matchMedia && matchMedia("(max-width: 560px)").matches;  // phones: dates are in the due list
   function columns(name) {
     const m = p => p.value == null ? "" : money(p.value, p.data && p.data.currency);
     const d = p => fmtShort(p.value);
     if (name === "invoices") return [
       { field: "customer", headerName: t("col_customer"), flex: 1.3, minWidth: 120 },
       { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: 110, flex: 0.9 },
-      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 90, flex: 0.7 },
+      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 90, flex: 0.7, hide: narrow() },
       { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 132, flex: 1 },
       { headerName: t("col_actions"), cellRenderer: invoiceActions, width: status && status.demo_mode ? 256 : 150, sortable: false },
     ];
     if (name === "bills") return [
       { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: 150, cellRenderer: twoLines },
       { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 112, flex: 0.9 },
-      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 96, flex: 0.8, sort: "asc" },
+      { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 96, flex: 0.8, sort: "asc", hide: narrow() },
       { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 130, flex: 0.9 },
       { headerName: t("col_actions"), cellRenderer: billActions, width: 164, sortable: false },
     ];
@@ -688,6 +692,7 @@
     renderList("memory", s.facts, t("empty_memory"), f => li("", f, "spark"));
     pending = s.confirmations || [];
     renderAuthCards(); renderSecurityCard();
+    if (wantOpen) { const c = pending.find(x => x.id === wantOpen); if (c) { wantOpen = null; if (!modalConf) openModal(c); } }
     if (modalConf) {
       const still = pending.find(c => c.id === modalConf.id && c.fingerprint === modalConf.fingerprint);
       if (!still) closeModal();  // decided elsewhere (by voice) or replaced by a changed proposal

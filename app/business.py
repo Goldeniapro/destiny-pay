@@ -366,8 +366,9 @@ class Business:
         cur = self.store.x("INSERT INTO bills(ws,payee,payee_email,description,amount,currency,due_date,recurrence,status,anchor_day,created_at) "
                            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                            (self.ws, payee, email, _clean(description, 200), amount, self.currency, d.isoformat(), recurrence, "pending", d.day, time.time()))
-        if email:
-            self.save_contact(payee, email, "supplier")
+        known = self.store.one("SELECT email FROM contacts WHERE ws=? AND name=? COLLATE NOCASE", (self.ws, payee))
+        if email and (known is None or not known["email"]):
+            self.save_contact(payee, email, "supplier")  # never replace a saved email silently: the owner changes it explicitly
         self.log("bill_added", f"Bill to pay: {payee} {i18n.fmt_money(amount, self.currency)} on {d.isoformat()}", "bill_added", {"payee": payee, "amount": [amount, self.currency], "date": d.isoformat()}, bill_id=cur.lastrowid)
         return self.bill_view(cur.lastrowid)
 
@@ -386,7 +387,7 @@ class Business:
         overdue = b["status"] in ("pending", "processing") and b["due_date"] < self.today().isoformat()
         return {"id": b["id"], "payee": b["payee"], "payee_email": b["payee_email"], "description": b["description"],
                 "amount": b["amount"], "currency": b["currency"], "due_date": b["due_date"], "recurrence": b["recurrence"],
-                "status": b["status"], "method": b["method"], "overdue": overdue}
+                "status": b["status"], "method": b["method"], "overdue": overdue, "created_at": b["created_at"]}
 
     def list_bills(self, status: str = "pending", within_days: int = 0) -> list[dict]:
         if status == "pending":
@@ -804,7 +805,8 @@ class Business:
             if kind == "cancel_invoice" and view["status"] not in UNPAID_STATUSES:
                 raise ValidationError(f"Only sent, unpaid invoices can be cancelled (this one is {view['status']}).")
             details = {"customer": view["customer"], "email": view["email"], "total": view["total"], "currency": view["currency"],
-                       "items": view["items"], "total_cents": int(round(float(view["total"]) * 100)), "invoice_id": str(target)}
+                       "items": view["items"], "total_cents": int(round(float(view["total"]) * 100)), "invoice_id": str(target),
+                       "status": view["status"], "due_cents": int(round(float(view["due"] or 0) * 100))}
             return details, str(target)
         if kind == "pay_bill":
             b = self.bill_view(target)
@@ -813,9 +815,23 @@ class Business:
             if not EMAIL_RE.match(b["payee_email"] or ""):
                 raise ValidationError(f"I need {b['payee']}'s PayPal email before paying. Ask the owner, then use add_bill or save_contact.")
             details = {"payee": b["payee"], "email": b["payee_email"], "amount": b["amount"], "currency": b["currency"],
-                       "description": b["description"], "amount_cents": int(round(float(b["amount"]) * 100)), "bill_id": b["id"]}
+                       "description": b["description"], "amount_cents": int(round(float(b["amount"]) * 100)), "bill_id": b["id"],
+                       "created_at": b.get("created_at")}
             return details, str(b["id"])
         raise ValidationError("Unknown action.")
+
+    def _paypal_matches(self, invoice_id: str, details: dict) -> bool:
+        """The invoice as PayPal holds it must be the one the owner reviewed: recipient, amount, currency and items."""
+        inv = self.paypal.get_invoice(invoice_id)
+        rec = ((inv.get("primary_recipients") or [{}])[0].get("billing_info") or {})
+        amount = inv.get("amount") or {}
+        items = [(str(i.get("name", "")), float(i.get("quantity") or 0), int(round(float((i.get("unit_amount") or {}).get("value") or 0) * 100)))
+                 for i in inv.get("items") or []]
+        mine = [(str(i.get("name", "")), float(i.get("quantity") or 0), int(round(float(i.get("unit_price") or 0) * 100))) for i in details.get("items") or []]
+        return (str(rec.get("email_address", "")).lower() == str(details.get("email") or "").lower()
+                and int(round(float(amount.get("value") or 0) * 100)) == details.get("total_cents")
+                and str(amount.get("currency_code") or details.get("currency")) == details.get("currency")
+                and sorted(items) == sorted(mine))
 
     def _fingerprint(self, kind: str, target: str, details: dict) -> str:
         """Binds an authorization to one exact operation: any change to who, where, what or how much changes it."""
@@ -845,6 +861,14 @@ class Business:
 
     def pending_confirmations(self) -> list[dict]:
         self.expire_confirmations()
+        for r in self.store.q("SELECT id, kind, target, fingerprint FROM confirmations WHERE ws=? AND status='pending'", (self.ws,)):
+            try:
+                current, _ = self._proposal(r["kind"], r["target"])
+                changed = self._fingerprint(r["kind"], r["target"], current) != r["fingerprint"]
+            except (ValidationError, PayPalError):
+                changed = True
+            if changed:  # never show the owner a card for an operation that no longer matches
+                self.store.x("UPDATE confirmations SET status='invalidated', resolved_at=? WHERE id=? AND status='pending'", (time.time(), r["id"]))
         rows = self.store.q("SELECT * FROM confirmations WHERE ws=? AND status='pending' ORDER BY created_at", (self.ws,))
         return [{"id": r["id"], "kind": r["kind"], "target": r["target"], "details": json.loads(r["details"]), "created_at": r["created_at"],
                  "expires_at": r["created_at"] + CONFIRMATION_TTL, "fingerprint": r["fingerprint"]} for r in rows]
@@ -858,20 +882,28 @@ class Business:
         row = self.store.one("SELECT * FROM confirmations WHERE id=? AND ws=?", (str(cid), self.ws))
         if row is None or row["status"] != "pending":
             return False, i18n.t("c_gone", lang), {}
+        new_status = "executing" if approve else "denied"
+        if self.store.x("UPDATE confirmations SET status=?, resolved_at=? WHERE id=? AND status='pending'", (new_status, time.time(), cid)).rowcount != 1:
+            return False, i18n.t("c_gone", lang), {}  # already handled (double click, button + voice): never run twice
         if approve:
+            # Claimed first, validated second: nothing can change between the check and the execution unnoticed.
             stale = fingerprint is not None and fingerprint != row["fingerprint"]
             try:
                 current, _ = self._proposal(row["kind"], row["target"])
                 stale = stale or self._fingerprint(row["kind"], row["target"], current) != row["fingerprint"]
+                if not stale and row["kind"] in ("send_invoice", "cancel_invoice"):
+                    try:
+                        stale = not self._paypal_matches(row["target"], json.loads(row["details"]))  # what PayPal itself holds
+                    except PayPalError:
+                        # couldn't check with PayPal right now: run nothing, keep the card so the owner can try again
+                        self.store.x("UPDATE confirmations SET status='pending', resolved_at=NULL WHERE id=? AND status='executing'", (cid,))
+                        return False, i18n.t("c_unverified", lang), {}
             except (ValidationError, PayPalError):
                 stale = True  # e.g. the bill was paid another way or the invoice is no longer a draft
             if stale:
-                self.store.x("UPDATE confirmations SET status='invalidated', resolved_at=? WHERE id=? AND status='pending'", (time.time(), cid))
+                self.store.x("UPDATE confirmations SET status='invalidated' WHERE id=? AND status='executing'", (cid,))
                 self.log("confirmation_invalidated", f"Authorization refused: {row['kind']} changed after it was proposed", "confirmation_invalidated", {}, confirmation_id=cid)
                 return False, i18n.t("c_changed", lang), {}
-        new_status = "executing" if approve else "denied"
-        if self.store.x("UPDATE confirmations SET status=?, resolved_at=? WHERE id=? AND status='pending'", (new_status, time.time(), cid)).rowcount != 1:
-            return False, i18n.t("c_gone", lang), {}  # already handled (double click, button + voice): never run twice
         details = json.loads(row["details"])
         if not approve:
             self.log("confirmation_denied", f"Owner declined: {row['kind']}", "confirmation_denied", {}, confirmation_id=cid)

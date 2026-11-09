@@ -369,6 +369,7 @@ window.UI = {
    "PLIN": "Plin (registrado)",
    "CARD": "Tarjeta (registrado)",
    "TRANSFER": "Transferencia (registrada)",
+   "BANK_TRANSFER": "Transferencia (registrada)",
    "OTHER": "Otro (registrado)"
   },
   "noMovements": "Aún no hay movimientos.",
@@ -641,6 +642,7 @@ window.UI = {
    "PLIN": "Plin (recorded)",
    "CARD": "Card (recorded)",
    "TRANSFER": "Transfer (recorded)",
+   "BANK_TRANSFER": "Transfer (recorded)",
    "OTHER": "Other (recorded)"
   },
   "noMovements": "No movements yet.",
@@ -913,6 +915,7 @@ window.UI = {
    "PLIN": "Plin (registrado)",
    "CARD": "Cartão (registrado)",
    "TRANSFER": "Transferência (registrada)",
+   "BANK_TRANSFER": "Transferência (registrada)",
    "OTHER": "Outro (registrado)"
   },
   "noMovements": "Ainda não há movimentos.",

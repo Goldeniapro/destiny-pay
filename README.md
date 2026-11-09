@@ -40,6 +40,20 @@ Micro and small businesses are about 99% of all companies in Latin America ([CEP
 - **Hardened web surface.** Strict Content-Security-Policy and security headers, request bodies capped before parsing, no public API docs, webhooks verified (certificate host checked first) and handled once per event id, slow upstream calls kept off the event loop, idle sample businesses purged.
 - **Sandbox only.** Live PayPal is refused unless explicitly enabled.
 
+## The authorization gate (how money moves, step by step)
+1. **The AI interprets.** Claude has no tool that sends, cancels or pays. It can only call `request_send_invoice`, `request_cancel_invoice` or `request_pay_bill`.
+2. **The code fixes the proposal.** The server rebuilds the operation from its own records (customer or payee, email, amount in cents, currency, items or concept) and stores it with a SHA-256 **fingerprint**. A changed operation supersedes the old card.
+3. **The owner authorizes that exact operation.** The authorization dialog shows type, amount, recipient, email, concept, a readback written by the code (not by the AI) and the expiry. *Authorize* stays disabled until the owner ticks "I reviewed the data". The browser must send the fingerprint of what it displayed; a spoken "yes" only counts for the single proposal read back in the previous turn.
+4. **The server re-validates and executes.** It re-reads the operation and refuses if anything changed (amount, email, items, status); the confirmation is claimed atomically, so a double click, a replay or button + voice run once. Only then does it call PayPal, with `PayPal-Request-Id` on every POST and a unique `sender_batch_id` per payout.
+5. **PayPal's answer is the truth.** A bill becomes paid only when PayPal reports the payout; an uncertain answer blocks the bill until PayPal's status settles it; invoices change state from PayPal reads and verified, de-duplicated webhooks.
+
+| Flow | States shown |
+|---|---|
+| Proposal | pending authorization → authorized (executing) → done / failed · rejected · expired (15 min) · invalidated (changed) · superseded |
+| Invoice | Draft → Sent → Paid · Partially paid · Paid (recorded) · Cancelled · Overdue |
+| Supplier payment | Pending → Processing at PayPal → Paid (success or unclaimed, with follow-up) · back to Pending if PayPal fails/returns it · Reconciling with PayPal when an answer is uncertain |
+| Recorded sale (cash, Yape, card) | Recorded only: never shown as processed by PayPal |
+
 ## Built around real PayPal pain points
 | What small sellers struggle with | What Destiny Pay does |
 |---|---|

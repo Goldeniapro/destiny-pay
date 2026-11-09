@@ -120,7 +120,7 @@ def test_button_confirm_records_in_conversation(setup):
     out = agent.confirm(biz.ws, "conv-4", cid, True, "en")
     assert out["done"] and "Sarah Miller" in out["reply"]
     conv = agent.conversations.peek("conv-4")
-    assert conv.awaiting == "" and "pressed Confirm" in conv.messages[-2]["content"][0]["text"]
+    assert conv.awaiting == "" and "pressed Authorize" in conv.messages[-2]["content"][0]["text"]
     assert not agent.confirm(biz.ws, "conv-4", cid, True, "en")["done"]
 
 
@@ -283,7 +283,7 @@ def test_code_always_reads_back_what_a_yes_will_approve(setup):
     bill = biz.add_bill("Marta Quispe", "Alquiler", 1900, biz.today().isoformat(), "monthly", "marta@example.com")
     agent, _ = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("Tienes 1.900 de alquiler. ¿Te pongo un recordatorio?")])
     res = agent.chat(biz.ws, "conv-rb", "Págale a Marta", "es")
-    assert res["reply"].endswith("Para confirmar: pagar 1.900,00 USD a Marta Quispe con PayPal. Di «sí» o toca Autorizar.")
+    assert res["reply"].endswith("Para confirmar: pagar 1.900,00 USD a Marta Quispe con PayPal, al correo marta@example.com. Di «sí» o toca Autorizar.")
 
 
 def test_conversation_ids_are_scoped_to_their_business(setup, make_biz):
@@ -292,3 +292,16 @@ def test_conversation_ids_are_scoped_to_their_business(setup, make_biz):
     agent.chat(biz.ws, "shared-id", "hola", "es")
     assert agent.conversations.peek("shared-id", biz.ws) is not None
     assert agent.conversations.peek("shared-id", "f" * 32) is None
+
+
+def test_payee_written_down_in_the_same_turn_needs_the_button(setup):
+    """v5 audit H1: a voice 'yes' never approves a payout to a payee the model just added."""
+    biz, make = setup
+    def add_then_request(kw):
+        bill = biz.add_bill("Proveedor Nuevo", "x", 180, biz.today().isoformat(), "none", "nuevo@example.com")
+        return tool("request_pay_bill", {"bill_id": bill["id"]}, "t2")
+    agent, _ = make([add_then_request, text("Le pago 180 a Proveedor Nuevo."), text("ok")])
+    res = agent.chat(biz.ws, "conv-newpayee", "Págale 180 a Proveedor Nuevo", "es")
+    assert T["button_only"]["es"] in res["reply"]
+    agent.chat(biz.ws, "conv-newpayee", "sí", "es")
+    assert biz.paypal.payouts == {}

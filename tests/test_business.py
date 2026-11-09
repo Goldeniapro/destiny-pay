@@ -245,7 +245,9 @@ def test_confirmation_never_stuck_and_refresh_failure_is_not_a_failure(biz, monk
 
     def flaky_get(i):
         calls["n"] += 1
-        raise PayPalError("PayPal 503")
+        if calls["n"] == 1:
+            return real_get(i)  # the pre-send check against PayPal works...
+        raise PayPalError("PayPal 503")  # ...the refresh after sending fails
 
     monkeypatch.setattr(biz.paypal, "get_invoice", flaky_get)
     done, reply, result = biz.resolve_confirmation(req["confirmation_id"], True, "en")
@@ -592,3 +594,45 @@ def test_new_proposal_supersedes_a_stale_one_and_the_right_one_runs_once(biz):
     assert biz.resolve_confirmation(new["confirmation_id"], True, "es", fingerprint=new["fingerprint"])[0] is True
     assert biz.resolve_confirmation(new["confirmation_id"], True, "es", fingerprint=new["fingerprint"])[0] is False  # replay
     assert len(biz.paypal.payouts) == 1
+
+
+# --- v5 audit fixes --------------------------------------------------------------------------
+def test_add_bill_never_replaces_a_saved_supplier_email(biz):
+    biz.save_contact("Textiles Andinos", "pagos@textiles.example.com", "supplier")
+    bill = biz.add_bill("Textiles Andinos", "Hilo", 180, biz.today().isoformat(), "none", "attacker@evil.example")
+    assert biz.find_contacts("Textiles Andinos")[0]["email"] == "pagos@textiles.example.com"
+    req = biz.request_confirmation("pay_bill", str(bill["id"]))
+    assert req["details"]["email"] == "attacker@evil.example"  # the card shows exactly where the money would go
+
+
+def test_partial_payment_voids_a_pending_cancellation(biz):
+    inv = biz.draft_invoice("Ana", "ana@example.com", [{"name": "x", "quantity": 1, "unit_price": 100}], "")
+    biz.send_invoice(inv["id"])
+    req = biz.request_confirmation("cancel_invoice", inv["id"])
+    biz.record_payment(inv["id"], 90, "CASH")
+    assert biz.pending_confirmations() == []  # the stale card is withdrawn
+    done, reply, _ = biz.resolve_confirmation(req["confirmation_id"], True, "en", fingerprint=req["fingerprint"])
+    assert not done and biz.invoice_view(inv["id"])["status"] != "CANCELLED"
+
+
+def test_invoice_edited_at_paypal_after_review_is_not_sent(biz):
+    inv = biz.draft_invoice("Bob", "bob@example.com", [{"name": "x", "quantity": 1, "unit_price": 50}], "")
+    req = biz.request_confirmation("send_invoice", inv["id"])
+    pp = biz.paypal.get_invoice(inv["id"])
+    pp["primary_recipients"][0]["billing_info"]["email_address"] = "mallory@evil.example"
+    pp["amount"]["value"] = "5000.00"
+    biz.paypal._save(pp)
+    done, reply, _ = biz.resolve_confirmation(req["confirmation_id"], True, "en", fingerprint=req["fingerprint"])
+    assert not done and "changed" in reply and biz.paypal.get_invoice(inv["id"])["status"] == "DRAFT"
+
+
+def test_unverifiable_paypal_state_runs_nothing_and_keeps_the_card(biz, monkeypatch):
+    inv = biz.draft_invoice("Bob", "bob@example.com", [{"name": "x", "quantity": 1, "unit_price": 50}], "")
+    req = biz.request_confirmation("send_invoice", inv["id"])
+    real = biz.paypal.get_invoice
+    monkeypatch.setattr(biz.paypal, "get_invoice", lambda i: (_ for _ in ()).throw(PayPalError("PayPal 503")))
+    done, reply, _ = biz.resolve_confirmation(req["confirmation_id"], True, "en", fingerprint=req["fingerprint"])
+    assert not done and "verify" in reply
+    monkeypatch.setattr(biz.paypal, "get_invoice", real)
+    assert [c["id"] for c in biz.pending_confirmations()] == [req["confirmation_id"]]
+    assert biz.resolve_confirmation(req["confirmation_id"], True, "en", fingerprint=req["fingerprint"])[0] is True

@@ -250,3 +250,17 @@ def test_approval_needs_the_exact_fingerprint(api):
     assert rb["text"] == conf["readback"]
     ok = client.post("/api/confirm", json={**body, "fingerprint": conf["fingerprint"]}).json()
     assert ok["done"] is True and "movements" in st
+
+
+def test_refused_approval_gives_back_the_payout_allowance(api, monkeypatch):
+    client, _ = api
+    monkeypatch.setattr(main, "payouts_per_ip", main.AmountQuota(200))
+    ws = new_ws(client, sample=False)
+    biz = main.business_factory(ws)
+    bill = biz.add_bill("T", "x", 150, biz.today().isoformat(), "none", "t@example.com")
+    req = biz.request_confirmation("pay_bill", str(bill["id"]))
+    body = {"workspace_id": ws, "conversation_id": "conv-refund-1", "confirmation_id": req["confirmation_id"], "approve": True, "lang": "en"}
+    assert client.post("/api/confirm", json={**body, "fingerprint": "0" * 32}).json()["done"] is False
+    req2 = biz.request_confirmation("pay_bill", str(bill["id"]))
+    ok = client.post("/api/confirm", json={**body, "confirmation_id": req2["confirmation_id"], "fingerprint": req2["fingerprint"]})
+    assert ok.status_code == 200 and ok.json()["done"] is True  # the failed attempt did not use up the allowance
