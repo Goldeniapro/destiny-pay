@@ -35,8 +35,21 @@ Micro and small businesses are about 99% of all companies in Latin America ([CEP
 - **Never twice.** Confirmations are claimed atomically (a button click and a spoken yes can't both run). Payouts use a unique `sender_batch_id` per bill plus a database lock before any money moves; if PayPal times out, the bill stays "in progress" (it can't be paid another way) until PayPal's own status settles it. Payouts are also capped per payment and per day. Every PayPal POST carries an idempotency key reused across retries. If a reply fails after a tool already ran, the agent remembers what was done and never repeats it.
 - **Isolated.** Every business only sees and acts on its own invoices, bills, reminders and confirmations, even on one shared sandbox merchant.
 - **Untrusted text stays data.** Contact names, notes, remembered facts and PayPal responses are passed as data, never as instructions.
-- **Bounded cost.** Rate limits per visitor and server-wide, a cap on new businesses, a daily token budget and a daily voice budget protect the public demo.
+- **Bounded cost.** Rate limits per visitor and server-wide, per-visitor daily quotas (new businesses, chats, transcriptions, money actions), a daily token budget and a daily voice budget protect the public demo.
+- **One question, one "yes".** If a single turn prepares more than one money action, none of them can be approved by voice, only with the buttons; and when the assistant's reply doesn't state the amount, the code reads it back itself.
+- **Hardened web surface.** Strict Content-Security-Policy and security headers, request bodies capped before parsing, no public API docs, webhooks verified (certificate host checked first) and handled once per event id, slow upstream calls kept off the event loop, idle sample businesses purged.
 - **Sandbox only.** Live PayPal is refused unless explicitly enabled.
+
+## Built around real PayPal pain points
+| What small sellers struggle with | What Destiny Pay does |
+|---|---|
+| Customers who pay late | Money owed is split by how late it is (not due, 1-30, 31-60, 60+ days), with scheduled PayPal reminders |
+| Fake "PayPal invoice" scams make customers distrust real ones | Every invoice tells the customer to verify it by signing in to PayPal directly and that the business never asks them to call a phone number |
+| Supplier payouts that nobody claims (wrong email, no account) and come back after 30 days | Tracks `UNCLAIMED` payouts and, after 3 days, tells the owner to check the email |
+| Funds held after a sudden change in activity | Warns when an invoice is far larger than the business's usual ones and suggests keeping proof of delivery; it never claims to prevent a hold |
+| Duplicate payments from retries | A unique `sender_batch_id` per attempt: PayPal refuses a repeat and links the original, which the app follows |
+
+PayPal's own [Agent Toolkit](https://github.com/paypal/agent-toolkit) covers invoicing but has no Payouts tools; Destiny Pay closes the loop by paying suppliers too, by voice, with confirmation enforced in code.
 
 ## Voice that holds up at a busy counter
 - **A native voice per language** (Fish Audio), chosen by measuring clarity with real transcriptions and streamed so speech starts in about half a second; the browser's own voice is the automatic fallback.
