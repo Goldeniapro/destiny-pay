@@ -550,3 +550,45 @@ def test_invoicing_never_overwrites_a_suppliers_saved_email(biz):
     biz.draft_invoice("Textiles Andinos", "otro@example.com", [{"name": "x", "quantity": 1, "unit_price": 10}], "")
     c = biz.find_contacts("Textiles Andinos")[0]
     assert c["email"] == "pagos@textiles.example.com" and c["kind"] == "supplier"
+
+
+# --- authorization bound to the exact operation (v5) ---------------------------------------
+def test_approval_with_another_operations_fingerprint_is_refused(biz):
+    bill = biz.add_bill("Textiles", "Hilo", 180, biz.today().isoformat(), "none", "t@example.com")
+    req = biz.request_confirmation("pay_bill", str(bill["id"]))
+    done, reply, _ = biz.resolve_confirmation(req["confirmation_id"], True, "es", fingerprint="0" * 32)
+    assert not done and "cambió" in reply and biz.bill_view(bill["id"])["status"] == "pending"
+    assert biz.paypal.payouts == {}
+    assert biz.resolve_confirmation(req["confirmation_id"], True, "es", fingerprint=req["fingerprint"])[0] is False  # void now
+
+
+def test_changing_the_bill_after_the_proposal_voids_the_approval(biz):
+    bill = biz.add_bill("Textiles", "Hilo", 180, biz.today().isoformat(), "none", "t@example.com")
+    req = biz.request_confirmation("pay_bill", str(bill["id"]))
+    for change in ("amount=1800", "payee_email='attacker@example.com'"):
+        biz.store.x(f"UPDATE bills SET {change} WHERE id=?", (bill["id"],))
+        done, reply, _ = biz.resolve_confirmation(req["confirmation_id"], True, "es", fingerprint=req["fingerprint"])
+        assert not done and "cambió" in reply and biz.paypal.payouts == {}
+        req = biz.request_confirmation("pay_bill", str(bill["id"]))  # a fresh proposal shows the new data
+        assert req["details"]["amount_cents"] == 180000  # the fresh card shows the new amount (and later the new email)
+
+
+def test_changing_the_invoice_after_the_proposal_voids_the_approval(biz):
+    inv = biz.draft_invoice("Ana", "ana@example.com", [{"name": "x", "quantity": 1, "unit_price": 10}], "")
+    req = biz.request_confirmation("send_invoice", inv["id"])
+    biz.store.x("UPDATE invoices SET total=999 WHERE id=?", (inv["id"],))
+    done, _, _ = biz.resolve_confirmation(req["confirmation_id"], True, "es", fingerprint=req["fingerprint"])
+    assert not done and biz.invoice_view(inv["id"])["status"] == "DRAFT"
+
+
+def test_new_proposal_supersedes_a_stale_one_and_the_right_one_runs_once(biz):
+    bill = biz.add_bill("Textiles", "Hilo", 180, biz.today().isoformat(), "none", "t@example.com")
+    old = biz.request_confirmation("pay_bill", str(bill["id"]))
+    assert biz.request_confirmation("pay_bill", str(bill["id"]))["confirmation_id"] == old["confirmation_id"]  # unchanged: same card
+    biz.store.x("UPDATE bills SET description='Hilo extra' WHERE id=?", (bill["id"],))
+    new = biz.request_confirmation("pay_bill", str(bill["id"]))
+    assert new["confirmation_id"] != old["confirmation_id"]
+    assert [c["id"] for c in biz.pending_confirmations()] == [new["confirmation_id"]]
+    assert biz.resolve_confirmation(new["confirmation_id"], True, "es", fingerprint=new["fingerprint"])[0] is True
+    assert biz.resolve_confirmation(new["confirmation_id"], True, "es", fingerprint=new["fingerprint"])[0] is False  # replay
+    assert len(biz.paypal.payouts) == 1

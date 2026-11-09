@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS alerts(
 CREATE TABLE IF NOT EXISTS confirmations(
   id TEXT PRIMARY KEY, ws TEXT NOT NULL, conversation TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, target TEXT NOT NULL,
   details TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'pending', result TEXT NOT NULL DEFAULT '',
-  created_at REAL NOT NULL, resolved_at REAL);
+  created_at REAL NOT NULL, resolved_at REAL, fingerprint TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS payouts(
   sender_batch_id TEXT PRIMARY KEY, ws TEXT NOT NULL, bill_id INTEGER NOT NULL, status TEXT NOT NULL,
   batch_id TEXT NOT NULL DEFAULT '', amount REAL NOT NULL DEFAULT 0, checked_at REAL NOT NULL DEFAULT 0, created_at REAL NOT NULL,
@@ -82,7 +82,8 @@ class Store:
             self._db.execute("PRAGMA busy_timeout=5000")
             self._db.executescript(SCHEMA)
             for table, column, decl in (("bills", "anchor_day", "INTEGER NOT NULL DEFAULT 0"), ("payouts", "amount", "REAL NOT NULL DEFAULT 0"),
-                                        ("payouts", "checked_at", "REAL NOT NULL DEFAULT 0"), ("payouts", "followed_up", "INTEGER NOT NULL DEFAULT 0")):
+                                        ("payouts", "checked_at", "REAL NOT NULL DEFAULT 0"), ("payouts", "followed_up", "INTEGER NOT NULL DEFAULT 0"),
+                                        ("confirmations", "fingerprint", "TEXT NOT NULL DEFAULT ''")):
                 cols = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})").fetchall()}
                 if column not in cols:  # older database: add the column in place
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")

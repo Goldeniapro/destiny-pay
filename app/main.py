@@ -411,11 +411,35 @@ def state(request: Request, ws: str = Header(alias="x-workspace", **WS_ID), lang
         "reminders": biz.list_reminders(),
         "contacts": biz.find_contacts("", limit=100),
         "activity": [render_activity(a, lang) for a in store.q("SELECT id, at, kind, text, data FROM activity WHERE ws=? ORDER BY id DESC LIMIT 40", (ws,))],
-        "confirmations": biz.pending_confirmations(),
+        "confirmations": [{**c, "readback": readback(c, lang)} for c in biz.pending_confirmations()],
+        "movements": [{"id": m["id"], "kind": m["kind"], "description": m["description"], "amount": m["amount"], "currency": m["currency"],
+                       "method": m["method"], "category": m["category"], "contact": m["contact"], "at": m["at"]}
+                      for m in store.q("SELECT * FROM movements WHERE ws=? ORDER BY at DESC LIMIT 12", (ws,))],
         "facts": biz.facts(20),
         "alerts": alerts,
         "last_alert_id": store.last_alert_id(ws),
     }
+
+
+def readback(conf: dict, lang: str) -> str:
+    """What an approval will do, in the code's own words (from the stored proposal, never from the model)."""
+    d = conf.get("details") or {}
+    key = {"send_invoice": "rb_send_invoice", "cancel_invoice": "rb_cancel_invoice", "pay_bill": "rb_pay_bill"}.get(conf.get("kind", ""))
+    amount = d.get("total", d.get("amount"))
+    if not key or amount is None:
+        return ""
+    return i18n.t(key, lang, name=d.get("customer") or d.get("payee") or "", total=i18n.fmt_money(amount, d.get("currency", ""), lang))
+
+
+@app.get("/api/confirmation/{cid}/readback")
+def confirmation_readback(cid: str, request: Request, ws: str = Header(alias="x-workspace", **WS_ID), lang: str = "es"):
+    limit(request, "speech")
+    biz = open_business(ws)
+    conf = next((c for c in biz.pending_confirmations() if c["id"] == cid), None)
+    if conf is None:
+        raise HTTPException(404, "Not found")
+    text = readback(conf, lang_of(lang))
+    return {"text": text, "speech_id": voice.register(text, lang_of(lang))}
 
 
 def money_params(params: dict, lang: str) -> dict:
@@ -480,17 +504,22 @@ class ConfirmIn(BaseModel):
     confirmation_id: str = Field(min_length=6, max_length=32, pattern=r"^[a-f0-9]+$")
     approve: bool
     lang: str = "es"
+    # fingerprint of the exact operation the owner reviewed; required to approve
+    fingerprint: str = Field(default="", max_length=64, pattern=r"^[a-f0-9]*$")
 
 
 @app.post("/api/confirm")
 def confirm(body: ConfirmIn, request: Request):
     limit(request, "chat", "chat_ws", *(["money_day"] if body.approve else []), ws=body.workspace_id)
     biz = open_business(body.workspace_id)
+    if body.approve and not body.fingerprint:
+        raise HTTPException(400, "An approval must name the exact operation it approves")
     if body.approve:
         conf = next((c for c in biz.pending_confirmations() if c["id"] == body.confirmation_id), None)
         if conf and conf["kind"] == "pay_bill":
             charge_payout(client_ip(request), conf)
-    res = agent.confirm(body.workspace_id, body.conversation_id, body.confirmation_id, body.approve, lang_of(body.lang))
+    res = agent.confirm(body.workspace_id, body.conversation_id, body.confirmation_id, body.approve, lang_of(body.lang),
+                        body.fingerprint if body.approve else None)
     res["speech_id"] = voice.register(res["reply"], lang_of(body.lang))
     return res
 

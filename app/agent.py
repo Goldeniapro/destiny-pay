@@ -311,11 +311,11 @@ class DestinyPayAgent:
         finally:
             conv.lock.release()
 
-    def confirm(self, ws: str, conversation_id: str, confirmation_id: str, approve: bool, lang: str = "es") -> dict:
-        """The owner pressed Confirm or Cancel on a card."""
+    def confirm(self, ws: str, conversation_id: str, confirmation_id: str, approve: bool, lang: str = "es", fingerprint: str | None = None) -> dict:
+        """The owner pressed Authorize or Reject in the authorization dialog."""
         lang = lang if lang in LANGS else "es"
         biz = self.business(ws)
-        done, reply, result = biz.resolve_confirmation(confirmation_id, approve, lang)
+        done, reply, result = biz.resolve_confirmation(confirmation_id, approve, lang, fingerprint)
         conv = self.conversations.peek(conversation_id, ws)
         if conv is not None and conv.lock.acquire(blocking=False):
             try:

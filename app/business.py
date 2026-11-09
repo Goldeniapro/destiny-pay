@@ -795,33 +795,49 @@ class Business:
         return "\n".join(lines)
 
     # --- confirmations: executed by code when the owner says yes --------------------------
-    def request_confirmation(self, kind: str, target: str, conversation: str = "") -> dict:
+    def _proposal(self, kind: str, target: str) -> tuple[dict, str]:
+        """The exact operation, read from the source of truth (never from the model or the browser)."""
         if kind in ("send_invoice", "cancel_invoice"):
             view = self.invoice_view(target)
             if kind == "send_invoice" and view["status"] != "DRAFT":
                 raise ValidationError(f"That invoice is {view['status']}, not a draft, so it cannot be sent again.")
             if kind == "cancel_invoice" and view["status"] not in UNPAID_STATUSES:
                 raise ValidationError(f"Only sent, unpaid invoices can be cancelled (this one is {view['status']}).")
-            details = {"customer": view["customer"], "email": view["email"], "total": view["total"], "currency": view["currency"], "items": view["items"]}
-        elif kind == "pay_bill":
+            details = {"customer": view["customer"], "email": view["email"], "total": view["total"], "currency": view["currency"],
+                       "items": view["items"], "total_cents": int(round(float(view["total"]) * 100)), "invoice_id": str(target)}
+            return details, str(target)
+        if kind == "pay_bill":
             b = self.bill_view(target)
             if b["status"] != "pending":
                 raise ValidationError("That bill is already paid or its PayPal payment is in progress.")
             if not EMAIL_RE.match(b["payee_email"] or ""):
                 raise ValidationError(f"I need {b['payee']}'s PayPal email before paying. Ask the owner, then use add_bill or save_contact.")
-            details = {"payee": b["payee"], "email": b["payee_email"], "amount": b["amount"], "currency": b["currency"], "description": b["description"]}
-            target = str(b["id"])
-        else:
-            raise ValidationError("Unknown action.")
+            details = {"payee": b["payee"], "email": b["payee_email"], "amount": b["amount"], "currency": b["currency"],
+                       "description": b["description"], "amount_cents": int(round(float(b["amount"]) * 100)), "bill_id": b["id"]}
+            return details, str(b["id"])
+        raise ValidationError("Unknown action.")
+
+    def _fingerprint(self, kind: str, target: str, details: dict) -> str:
+        """Binds an authorization to one exact operation: any change to who, where, what or how much changes it."""
+        body = json.dumps({"ws": self.ws, "kind": kind, "target": str(target), "details": details}, sort_keys=True, ensure_ascii=False, default=str)
+        return hashlib.sha256(body.encode()).hexdigest()[:32]
+
+    def request_confirmation(self, kind: str, target: str, conversation: str = "") -> dict:
+        details, target = self._proposal(kind, target)
+        fp = self._fingerprint(kind, target, details)
         self.expire_confirmations()
-        existing = self.store.one("SELECT id FROM confirmations WHERE ws=? AND kind=? AND target=? AND status='pending'", (self.ws, kind, str(target)))
-        cid = existing["id"] if existing else uuid.uuid4().hex[:12]
-        if not existing:
-            self.store.x("INSERT INTO confirmations(id,ws,conversation,kind,target,details,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                         (cid, self.ws, conversation, kind, str(target), json.dumps(details, ensure_ascii=False), "pending", time.time()))
-        return {"status": "awaiting_owner_confirmation", "confirmation_id": cid, "action": kind, "details": details,
-                "instructions": "Read these details back to the owner and ask them to confirm. The action runs only when the owner "
-                                "presses Confirm or answers yes; you cannot execute it yourself."}
+        with self.store.lock:
+            existing = self.store.one("SELECT id, fingerprint FROM confirmations WHERE ws=? AND kind=? AND target=? AND status='pending'", (self.ws, kind, str(target)))
+            if existing and existing["fingerprint"] != fp:  # the operation changed since it was proposed: the old approval card is void
+                self.store.x("UPDATE confirmations SET status='superseded', resolved_at=? WHERE id=?", (time.time(), existing["id"]))
+                existing = None
+            cid = existing["id"] if existing else uuid.uuid4().hex[:12]
+            if not existing:
+                self.store.x("INSERT INTO confirmations(id,ws,conversation,kind,target,details,status,created_at,fingerprint) VALUES(?,?,?,?,?,?,?,?,?)",
+                             (cid, self.ws, conversation, kind, str(target), json.dumps(details, ensure_ascii=False), "pending", time.time(), fp))
+        return {"status": "awaiting_owner_confirmation", "confirmation_id": cid, "action": kind, "details": details, "fingerprint": fp,
+                "instructions": "Read these details back to the owner. The action runs only when the owner presses Authorize or "
+                                "answers yes; you cannot execute it yourself."}
 
     def expire_confirmations(self) -> None:
         self.store.x("UPDATE confirmations SET status='expired', resolved_at=? WHERE ws=? AND status='pending' AND created_at<?",
@@ -830,14 +846,29 @@ class Business:
     def pending_confirmations(self) -> list[dict]:
         self.expire_confirmations()
         rows = self.store.q("SELECT * FROM confirmations WHERE ws=? AND status='pending' ORDER BY created_at", (self.ws,))
-        return [{"id": r["id"], "kind": r["kind"], "target": r["target"], "details": json.loads(r["details"]), "created_at": r["created_at"]} for r in rows]
+        return [{"id": r["id"], "kind": r["kind"], "target": r["target"], "details": json.loads(r["details"]), "created_at": r["created_at"],
+                 "expires_at": r["created_at"] + CONFIRMATION_TTL, "fingerprint": r["fingerprint"]} for r in rows]
 
-    def resolve_confirmation(self, cid: str, approve: bool, lang: str) -> tuple[bool, str, dict]:
-        """Run (or drop) a pending action. Returns (done, spoken reply, result)."""
+    def resolve_confirmation(self, cid: str, approve: bool, lang: str, fingerprint: str | None = None) -> tuple[bool, str, dict]:
+        """Run (or drop) a pending action. Returns (done, spoken reply, result).
+
+        An approval is valid only for the exact operation it was shown for: the browser must send the fingerprint
+        of what it displayed, and the operation is re-read from the source of truth and must still match."""
         self.expire_confirmations()
         row = self.store.one("SELECT * FROM confirmations WHERE id=? AND ws=?", (str(cid), self.ws))
-        if row is None:
+        if row is None or row["status"] != "pending":
             return False, i18n.t("c_gone", lang), {}
+        if approve:
+            stale = fingerprint is not None and fingerprint != row["fingerprint"]
+            try:
+                current, _ = self._proposal(row["kind"], row["target"])
+                stale = stale or self._fingerprint(row["kind"], row["target"], current) != row["fingerprint"]
+            except (ValidationError, PayPalError):
+                stale = True  # e.g. the bill was paid another way or the invoice is no longer a draft
+            if stale:
+                self.store.x("UPDATE confirmations SET status='invalidated', resolved_at=? WHERE id=? AND status='pending'", (time.time(), cid))
+                self.log("confirmation_invalidated", f"Authorization refused: {row['kind']} changed after it was proposed", "confirmation_invalidated", {}, confirmation_id=cid)
+                return False, i18n.t("c_changed", lang), {}
         new_status = "executing" if approve else "denied"
         if self.store.x("UPDATE confirmations SET status=?, resolved_at=? WHERE id=? AND status='pending'", (new_status, time.time(), cid)).rowcount != 1:
             return False, i18n.t("c_gone", lang), {}  # already handled (double click, button + voice): never run twice

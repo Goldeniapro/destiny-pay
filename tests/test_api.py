@@ -66,7 +66,8 @@ def test_chat_confirm_and_alerts(api):
     cid = r["ui"][0]["confirmation"]["confirmation_id"]
     st = client.get("/api/state", headers={"x-workspace": ws}).json()
     assert st["confirmations"][0]["id"] == cid
-    c = client.post("/api/confirm", json={"workspace_id": ws, "conversation_id": "conv-api-1", "confirmation_id": cid, "approve": True, "lang": "es"}).json()
+    fp = next(c for c in client.get("/api/state", headers={"x-workspace": ws}).json()["confirmations"] if c["id"] == cid)["fingerprint"]
+    c = client.post("/api/confirm", json={"workspace_id": ws, "conversation_id": "conv-api-1", "confirmation_id": cid, "approve": True, "lang": "es", "fingerprint": fp}).json()
     assert c["done"] and "Sarah Miller" in c["reply"]
     assert client.post(f"/api/demo/pay/{inv['id']}", headers={"x-workspace": ws}).status_code == 200
     st = client.get("/api/state", params={"lang": "es", "since": 0}, headers={"x-workspace": ws}).json()
@@ -150,11 +151,10 @@ def test_per_visitor_payout_and_token_allowances(api, monkeypatch):
     biz = main.business_factory(ws)
     a = biz.add_bill("A", "x", 300, biz.today().isoformat(), "none", "a@example.com")
     b = biz.add_bill("B", "x", 300, biz.today().isoformat(), "none", "b@example.com")
-    ca = biz.request_confirmation("pay_bill", str(a["id"]))["confirmation_id"]
-    cb = biz.request_confirmation("pay_bill", str(b["id"]))["confirmation_id"]
+    ra, rb = biz.request_confirmation("pay_bill", str(a["id"])), biz.request_confirmation("pay_bill", str(b["id"]))
     body = {"workspace_id": ws, "conversation_id": "conv-quota", "approve": True, "lang": "es"}
-    assert client.post("/api/confirm", json={**body, "confirmation_id": ca}).status_code == 200
-    assert client.post("/api/confirm", json={**body, "confirmation_id": cb}).status_code == 429  # 600 > 400 for this visitor
+    assert client.post("/api/confirm", json={**body, "confirmation_id": ra["confirmation_id"], "fingerprint": ra["fingerprint"]}).status_code == 200
+    assert client.post("/api/confirm", json={**body, "confirmation_id": rb["confirmation_id"], "fingerprint": rb["fingerprint"]}).status_code == 429  # 600 > 400
     assert biz.bill_view(b["id"])["status"] == "pending"
 
 
@@ -233,3 +233,20 @@ def test_activity_log_follows_language(api):
     pt = client.get("/api/state", params={"lang": "pt"}, headers={"x-workspace": ws}).json()["activity"]
     assert es[0]["text"] == "Negocio de ejemplo cargado" and en[0]["text"] == "Sample business loaded" and pt[0]["text"] == "Negócio de exemplo carregado"
     assert any(a["text"].startswith("Cuenta por pagar: Textiles Andinos SAC 180,00 USD") for a in es)
+
+
+def test_approval_needs_the_exact_fingerprint(api):
+    client, _ = api
+    ws = new_ws(client, sample=False)
+    biz = main.business_factory(ws)
+    bill = biz.add_bill("T", "x", 50, biz.today().isoformat(), "none", "t@example.com")
+    req = biz.request_confirmation("pay_bill", str(bill["id"]))
+    body = {"workspace_id": ws, "conversation_id": "conv-fingerprint", "confirmation_id": req["confirmation_id"], "approve": True, "lang": "en"}
+    assert client.post("/api/confirm", json=body).status_code == 400  # no fingerprint: not an approval
+    st = client.get("/api/state", params={"lang": "en"}, headers={"x-workspace": ws}).json()
+    conf = st["confirmations"][0]
+    assert conf["readback"].startswith("To confirm: pay T 50.00 USD") and conf["fingerprint"] == req["fingerprint"]
+    rb = client.get(f"/api/confirmation/{req['confirmation_id']}/readback", params={"lang": "en"}, headers={"x-workspace": ws}).json()
+    assert rb["text"] == conf["readback"]
+    ok = client.post("/api/confirm", json={**body, "fingerprint": conf["fingerprint"]}).json()
+    assert ok["done"] is True and "movements" in st
