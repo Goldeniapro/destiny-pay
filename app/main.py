@@ -268,6 +268,12 @@ def healthz():
     return {"ok": True}
 
 
+@app.get("/api/_ipcheck")  # TEMPORARY: which proxy headers this host sets (only the caller's own address)
+def ipcheck(request: Request):
+    keys = ("x-forwarded-for", "x-real-ip", "x-envoy-external-address", "true-client-ip", "cf-connecting-ip", "forwarded", "x-forwarded-proto")
+    return {k: request.headers.get(k) for k in keys} | {"peer": request.client.host if request.client else None}
+
+
 @app.get("/api/status")
 def status():
     return {
