@@ -2,7 +2,7 @@
 
 **The voice-first money desk for small businesses.** Talk to it in Spanish, English or Portuguese: Destiny Pay bills your customers with PayPal invoices, pays your suppliers with PayPal Payouts, remembers every customer and every debt, reminds you before things are due, and tells you how your business is really doing. **Nothing moves without your confirmation, and that rule is enforced in code, not in a prompt.**
 
-> 🔗 **Live demo:** _coming soon_ · 🎬 **Video:** _coming soon_ · Built for the PayPal AI Hackathon 2026 by Innov4AI SAC (Lima, Peru)
+> 🔗 **Live demo:** https://web-production-5eebcf.up.railway.app (PayPal Sandbox, no real money) · 🎬 **Video:** _coming soon_ · Built for the PayPal AI Hackathon 2026 by Innov4AI SAC (Lima, Peru)
 
 ## Why
 Micro and small businesses are about 99% of all companies in Latin America ([CEPAL](https://www.cepal.org/es/temas/micro-pequenas-medianas-empresas-mipyme/acerca-microempresas-pymes)). Many of them sell to tourists and clients abroad: tour guides in Cusco, artisan shops in Lima, guesthouses, freelancers. They run everything from a phone and a notebook: amounts typed by hand, debts nobody chases, bills paid late. Destiny Pay gives them a cashier and a bookkeeper they can simply talk to while they serve customers.
@@ -100,7 +100,7 @@ python scripts/sandbox_smoke.py buyer@personal.example.com   # real PayPal sandb
 ```
 
 ## Deploy
-`render.yaml` is a ready Render Blueprint with a persistent disk for the memory. Add `ANTHROPIC_API_KEY`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, and optionally `FISH_API_KEY` and `PAYPAL_WEBHOOK_ID` (the voice ids per language are already in the blueprint) (webhook URL: `https://<your-app>/api/paypal/webhook`).
+The live demo runs on **Railway** (Procfile, a volume mounted at `/data` with `DP_DB_PATH=/data/destiny_pay.db`, and the variables from `.env.example`). `render.yaml` is also a ready Render Blueprint with a persistent disk for the memory. Add `ANTHROPIC_API_KEY`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, and optionally `FISH_API_KEY` and `PAYPAL_WEBHOOK_ID` (the voice ids per language are already in the blueprint) (webhook URL: `https://<your-app>/api/paypal/webhook`).
 
 ## Roadmap
 - WhatsApp channel: talk to Destiny Pay where small sellers already work.
