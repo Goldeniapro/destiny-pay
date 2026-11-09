@@ -226,8 +226,18 @@ limits = {
 }
 
 
+# Railway's edge overwrites X-Real-IP with the visitor's real address (a forged one is replaced, verified live);
+# elsewhere set DP_CLIENT_IP_HEADER to the header your host's proxy guarantees.
+CLIENT_IP_HEADER = os.environ.get("DP_CLIENT_IP_HEADER", "").lower() or (
+    "x-real-ip" if any(k.startswith("RAILWAY_") for k in os.environ) else "")
+
+
 def client_ip(request: Request) -> str:
-    # Render's proxy appends the address it saw as the LAST hop; anything before it was sent by the client and can be forged.
+    if CLIENT_IP_HEADER:
+        trusted = request.headers.get(CLIENT_IP_HEADER, "").strip()
+        if trusted:
+            return trusted
+    # Otherwise the proxy appends the address it saw as the LAST hop; anything before it came from the client and can be forged.
     hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
     return hops[-1] if hops else (request.client.host if request.client else "unknown")
 
@@ -266,12 +276,6 @@ def index():
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
-
-
-@app.get("/api/_ipcheck")  # TEMPORARY: which proxy headers this host sets (only the caller's own address)
-def ipcheck(request: Request):
-    keys = ("x-forwarded-for", "x-real-ip", "x-envoy-external-address", "true-client-ip", "cf-connecting-ip", "forwarded", "x-forwarded-proto")
-    return {k: request.headers.get(k) for k in keys} | {"peer": request.client.host if request.client else None}
 
 
 @app.get("/api/status")

@@ -137,6 +137,13 @@ def test_forwarded_for_uses_the_proxy_hop(api):
     assert main.client_ip(req) == "9.9.9.9"  # the client can only forge what comes before the proxy's own hop
 
 
+def test_trusted_proxy_header_wins_when_configured(monkeypatch):
+    from starlette.requests import Request as R
+    monkeypatch.setattr(main, "CLIENT_IP_HEADER", "x-real-ip")  # Railway
+    req = R({"type": "http", "headers": [(b"x-real-ip", b"160.79.1.1"), (b"x-forwarded-for", b"160.79.1.1, 152.233.30.101")], "client": ("100.64.0.1", 1)})
+    assert main.client_ip(req) == "160.79.1.1"  # the visitor, not Railway's edge
+
+
 def test_daily_quota_per_ip(api, monkeypatch):
     client, _ = api
     monkeypatch.setitem(main.quotas, "workspace_day", main.DailyQuota(2))
