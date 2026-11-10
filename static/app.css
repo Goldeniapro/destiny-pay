@@ -541,3 +541,4 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 .grid-tools[data-grid="invoices"]{flex-wrap:wrap;row-gap:10px}
 .cell-btn.icon-only{padding:6px 8px;min-width:34px;margin-right:4px}
 @media (max-width:360px){.intro-brand{font-size:19px;gap:8px}.intro-mark{width:38px;height:38px}.intro-langs{gap:4px}.intro-langs button{padding:6px 8px;font-size:13px;min-height:36px}.intro-wrap{width:calc(100% - 28px)}}
+.cell-btn.icon-only{display:inline-flex;align-items:center;justify-content:center}

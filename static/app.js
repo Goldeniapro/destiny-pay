@@ -817,13 +817,17 @@
   function invoiceActions(p) {
     const r = p.data; const box = el("span"); if (!r || p.node.rowPinned) return box;
     if (OPEN.has(r.status)) {  // PayPal's own reminder to this customer, one click (no money moves)
-      const rb = el("button", "cell-btn" + (narrow() ? " icon-only" : ""), narrow() ? "" : u("inboxRemind")); rb.type = "button";
-      if (narrow()) { rb.appendChild(icon("bell")); rb.setAttribute("aria-label", u("inboxRemind") + " · " + r.customer); }
+      const rb = el("button", "cell-btn" + (compact() ? " icon-only" : ""), compact() ? "" : u("inboxRemind")); rb.type = "button";
+      if (compact()) { rb.appendChild(icon("bell")); rb.setAttribute("aria-label", u("inboxRemind") + " · " + r.customer); rb.title = u("inboxRemind"); }
       rb.addEventListener("click", () => remindInvoice(r.id, r.customer, rb));
       box.append(rb);
     }
     if (r.payer_link) {
-      if (!narrow()) { const a = el("a", "cell-btn", t("pay_link")); a.href = r.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; box.append(a); }
+      if (!narrow()) {
+        const a = el("a", "cell-btn" + (compact() ? " icon-only" : ""), compact() ? "" : t("pay_link")); a.href = r.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer";
+        if (compact()) { a.appendChild(icon("arrowup")); a.setAttribute("aria-label", t("pay_link") + " · " + r.customer); a.title = t("pay_link"); }
+        box.append(a);
+      }
       box.append(shareButton(r));
     }
     if (status && status.demo_mode && OPEN.has(r.status) && !narrow()) {
@@ -930,6 +934,8 @@
     });
   });
   const narrow = () => window.matchMedia && matchMedia("(max-width: 560px)").matches;  // phones: dates are in the due list
+  const compact = () => window.matchMedia && matchMedia("(max-width: 1399px)").matches;  // tablets and small laptops: row actions as icons
+  const coarse = () => window.matchMedia && matchMedia("(pointer: coarse)").matches;  // touch: 44px buttons need taller rows
   if (window.matchMedia) matchMedia("(max-width: 560px)").addEventListener("change", () => {
     for (const name of Object.keys(grids)) grids[name].setGridOption("columnDefs", columns(name));
   });
@@ -941,8 +947,8 @@
       { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: narrow() ? 86 : 110, flex: 0.9, type: "rightAligned" },
       { field: "due", headerName: u("colDue"), valueFormatter: m, minWidth: 104, flex: 0.8, type: "rightAligned", hide: narrow() },
       { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 90, flex: 0.7, hide: narrow() },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 110, flex: 1, filter: true, filterValueGetter: statusLabel, getQuickFilterText: statusLabel, hide: narrow() },
-      { colId: "actions", headerName: t("col_actions"), cellRenderer: invoiceActions, width: narrow() ? 116 : status && status.demo_mode ? 380 : 290, sortable: false, pinned: "right" },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 122, flex: 1, filter: true, filterValueGetter: statusLabel, getQuickFilterText: statusLabel, hide: narrow() },
+      { colId: "actions", headerName: t("col_actions"), cellRenderer: invoiceActions, width: narrow() ? 116 : compact() ? (status && status.demo_mode ? 250 : 160) : status && status.demo_mode ? 380 : 290, sortable: false, pinned: "right" },
     ];
     if (name === "bills") return [
       { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: narrow() ? 100 : 130, cellRenderer: twoLines, filter: true },
@@ -974,7 +980,7 @@
     const holder = $("grid-" + name);
     if (grids[name] && grids[name].__lang !== lang) { grids[name].destroy(); delete grids[name]; }
     if (!grids[name]) {
-      grids[name] = agGrid.createGrid(holder, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name), rowHeight: name === "bills" || name === "auth" ? 62 : 50,
+      grids[name] = agGrid.createGrid(holder, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name), rowHeight: name === "bills" || name === "auth" ? 62 : coarse() ? 58 : 50,
         defaultColDef: { sortable: true, filter: false, resizable: true, suppressHeaderMenuButton: true }, animateRows: true, localeText: { ...(GRID_LOCALE[lang] || {}), noRowsToShow: t("no_rows"), loadingOoo: "…" },
         getRowClass: p => (p.node.rowPinned ? "row-total" : ""), onFilterChanged: () => updateTotals(name), onRowDataUpdated: () => updateTotals(name),
         ...(name === "invoices" ? { rowSelection: { mode: "multiRow", checkboxes: true, headerCheckbox: true, enableClickSelection: false,
@@ -1055,8 +1061,8 @@
 
   // the phone's own share sheet (WhatsApp, SMS, email...) for PayPal's payment link; on a desktop, copy it
   function shareButton(inv) {
-    const b = el("button", "cell-btn" + (narrow() ? " icon-only" : ""), narrow() ? "" : u("share")); b.type = "button";
-    if (narrow()) { b.appendChild(icon("send")); b.setAttribute("aria-label", u("share")); }
+    const b = el("button", "cell-btn" + (compact() ? " icon-only" : ""), compact() ? "" : u("share")); b.type = "button";
+    if (compact()) { b.appendChild(icon("send")); b.setAttribute("aria-label", u("share")); b.title = u("share"); }
     b.addEventListener("click", async () => {
       const text = u("shareText", { amount: money(inv.due != null ? inv.due : inv.total, inv.currency) });
       try {
