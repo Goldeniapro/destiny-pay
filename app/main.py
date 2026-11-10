@@ -107,14 +107,20 @@ def voice_check(lang: str = "es") -> dict:
     return voice.health
 
 
+def voice_check_round(n: int) -> dict:
+    """The n-th watchdog check, rotating through the languages Destiny speaks."""
+    langs = list(LANGS)
+    return voice_check(langs[n % len(langs)])
+
+
 def _scheduler_loop(stop: threading.Event) -> None:
     last_purge = 0.0
     last_voice, voice_round = time.time() - VOICE_CHECK_SECONDS + 30, 0  # first check 30 s after start
     while not stop.wait(15):
+        if voice.tts_enabled and time.time() - last_voice > VOICE_CHECK_SECONDS:
+            last_voice = time.time()
+            voice_check_round(voice_round); voice_round += 1  # never raises
         try:
-            if voice.tts_enabled and time.time() - last_voice > VOICE_CHECK_SECONDS:
-                last_voice = time.time()
-                voice_check(LANGS[voice_round % len(LANGS)]); voice_round += 1
             scheduler_tick()
             if time.time() - last_purge > 3600:  # hourly: forget businesses idle for two days, trim logs
                 last_purge = time.time()

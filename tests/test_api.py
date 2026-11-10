@@ -384,3 +384,20 @@ def test_auto_remind_switch_is_per_business(api):
     assert client.get("/api/state", headers={"x-workspace": ws}).json()["business"]["auto_remind"] is True
     assert client.get("/api/state", headers={"x-workspace": other}).json()["business"]["auto_remind"] is False
     assert client.post("/api/auto-remind", json={"workspace_id": "f" * 32, "on": True}).status_code == 404
+
+
+def test_voice_watchdog_rotates_languages_and_reports_health(monkeypatch):
+    """Regression: the watchdog indexed the languages dict by position and never ran on the live app."""
+    seen = []
+    monkeypatch.setattr(main.voice, "probe", lambda lang: seen.append(lang) or 420)
+    monkeypatch.setattr(main.voice, "health", {})
+    for n in range(len(main.LANGS) + 1):
+        h = main.voice_check_round(n)
+    assert seen == list(main.LANGS) + [list(main.LANGS)[0]]
+    assert h["ok"] is True and h["ms"] == 420
+
+    def down(lang):
+        raise main.VoiceError("voice service error 503")
+    monkeypatch.setattr(main.voice, "probe", down)
+    h = main.voice_check_round(0)
+    assert h["ok"] is False and "503" in h["error"]
