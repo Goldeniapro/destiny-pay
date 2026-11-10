@@ -448,6 +448,8 @@ def readback(conf: dict, lang: str) -> str:
     amount = d.get("total", d.get("amount"))
     if not key or amount is None:
         return ""
+    if conf.get("kind") == "pay_bill" and conf.get("new_recipient"):
+        key = "rb_pay_bill_button"  # a first payment to an email is never approved by voice: don't invite a "yes"
     return i18n.t(key, lang, name=d.get("customer") or d.get("payee") or "", total=i18n.fmt_money(amount, d.get("currency", ""), lang), email=d.get("email") or "")
 
 

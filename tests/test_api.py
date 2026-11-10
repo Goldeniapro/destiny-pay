@@ -273,3 +273,10 @@ def test_privacy_page_and_head_request(api):
     r = client.get("/privacy")
     assert r.status_code == 200 and "Anthropic" in r.text and "Fish Audio" in r.text and "Sandbox" in r.text
     assert client.head("/").status_code == 200
+
+
+def test_first_payment_readback_does_not_invite_a_spoken_yes():
+    from app import main
+    conf = {"kind": "pay_bill", "new_recipient": True, "details": {"payee": "Textiles", "amount": 180, "currency": "USD", "email": "p@x.example"}}
+    assert "botón" in main.readback(conf, "es") and "sí" not in main.readback(conf, "es")
+    assert "Say" in main.readback({**conf, "new_recipient": False}, "en")
