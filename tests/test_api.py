@@ -401,3 +401,11 @@ def test_voice_watchdog_rotates_languages_and_reports_health(monkeypatch):
     monkeypatch.setattr(main.voice, "probe", down)
     h = main.voice_check_round(0)
     assert h["ok"] is False and "503" in h["error"]
+
+
+def test_page_and_static_files_are_revalidated_so_deploys_show_up():
+    c = TestClient(main.app)
+    for path in ("/", "/static/app.js", "/static/app.css"):
+        r = c.get(path)
+        assert r.status_code == 200 and r.headers.get("cache-control") == "no-cache", path
+    assert c.get("/sw.js").headers.get("cache-control") == "no-cache"

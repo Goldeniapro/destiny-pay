@@ -177,7 +177,12 @@ class GuardMiddleware:
 
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
-                message["headers"] = list(message.get("headers") or []) + SECURITY_HEADERS
+                headers = list(message.get("headers") or []) + SECURITY_HEADERS
+                # the page and its files are revalidated on every visit (a cheap 304), so a new deploy is never hidden
+                # behind a browser's heuristic cache; /api responses set their own rules
+                if (scope["path"] == "/" or scope["path"].startswith("/static/")) and not any(k.lower() == b"cache-control" for k, _ in headers):
+                    headers.append((b"cache-control", b"no-cache"))
+                message["headers"] = headers
             await send(message)
 
         await self.app(scope, limited_receive, send_with_headers)
