@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import i18n
+from . import fx, i18n
 from .agent import DestinyPayAgent, ai_configured
 from .business import Business, ValidationError
 from .fake import FakePayPal
@@ -338,6 +338,12 @@ def index():
     return FileResponse(STATIC / "index.html")
 
 
+@app.get("/sw.js")
+def service_worker():
+    """At the root so it can serve the app shell offline (scope "/"); never caches /api."""
+    return FileResponse(STATIC / "sw.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/privacy")
 def privacy():
     return FileResponse(STATIC / "privacy.html")
@@ -434,6 +440,7 @@ def state(request: Request, ws: str = Header(alias="x-workspace", **WS_ID), lang
         "confirmations": [{**c, "readback": readback(c, lang)} for c in biz.pending_confirmations()],
         "authorizations": biz.authorizations(),
         "webhook_last": webhook_last(biz.ws),
+        "fx": fx.pen_rate() if biz.currency == "USD" else {},  # reference only, for a soles equivalent on screen
         "inbox": biz.inbox(),
         "movements": [{"id": m["id"], "kind": m["kind"], "description": m["description"], "amount": m["amount"], "currency": m["currency"],
                        "method": m["method"], "category": m["category"], "contact": m["contact"], "at": m["at"]}

@@ -437,6 +437,7 @@
     const d = c.details || {};
     $("modalTitle").textContent = u(KIND_TITLE[c.kind]);
     bigMoney($("modalAmountValue"), amountOf(c), d.currency, true);
+    const pen = penText(amountOf(c), d.currency); $("modalPen").hidden = !pen; $("modalPen").textContent = pen; $("modalPen").title = penTitle();
     $("modalOperation").textContent = u(KIND_TYPE[c.kind]);
     $("modalRecipientValue").textContent = whoOf(c);
     $("modalEmailValue").textContent = d.email || "—";
@@ -568,12 +569,23 @@
     });
   });
 
+  // soles equivalent next to dollars: a public reference rate fetched by the server, never used to charge; hidden when unknown
+  function penText(v, cur) {
+    const fx = (lastState && lastState.fx) || {};
+    if (!fx.pen || (cur || currency) !== "USD" || v == null || !Number(v)) return "";
+    try { return u("penRef", { amount: "S/ " + new Intl.NumberFormat(lang, { maximumFractionDigits: 0, useGrouping: "always" }).format(Number(v) * fx.pen) }); }
+    catch (e) { return ""; }
+  }
+  const penTitle = () => { const fx = (lastState && lastState.fx) || {}; return fx.pen ? u("penSource", { rate: fx.pen.toFixed(3), source: fx.source || "" }) : ""; };
   function metric(label, iconName, value, sub, subCls) {
     const tile = el("div", "metric-tile");
     const top = el("div", "metric-top"); const ic = el("span", "metric-icon"); ic.appendChild(icon(iconName));
     top.append(el("span", "", label), ic);
     const v = el("div", "metric-value"); if (value === null) v.textContent = "…"; else bigMoney(v, value);
-    tile.append(top, v, el("small", subCls || "", sub || " "));
+    tile.append(top, v);
+    const pen = value === null ? "" : penText(Math.abs(value));
+    if (pen) { const p = el("span", "metric-pen", pen); p.title = penTitle(); tile.append(p); }
+    tile.append(el("small", subCls || "", sub || " "));
     return tile;
   }
   function renderMetrics(o, seeding) {
@@ -754,7 +766,7 @@
   }
   function invoiceActions(p) {
     const r = p.data; const box = el("span"); if (!r || p.node.rowPinned) return box;
-    if (r.payer_link) { const a = el("a", "cell-btn", t("pay_link")); a.href = r.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; box.appendChild(a); }
+    if (r.payer_link) { const a = el("a", "cell-btn", t("pay_link")); a.href = r.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; box.append(a, shareButton(r)); }
     if (status && status.demo_mode && OPEN.has(r.status)) {
       const b = el("button", "cell-btn", t("simulate")); b.type = "button";
       b.addEventListener("click", async () => { b.disabled = true; try { await api(`/api/demo/pay/${encodeURIComponent(r.id)}`, { method: "POST" }); } catch (e) { /* refresh shows it */ } refresh(); });
@@ -951,6 +963,19 @@
     }
   }
 
+  // the phone's own share sheet (WhatsApp, SMS, email...) for PayPal's payment link; on a desktop, copy it
+  function shareButton(inv) {
+    const b = el("button", "cell-btn", u("share")); b.type = "button";
+    b.addEventListener("click", async () => {
+      const text = u("shareText", { amount: money(inv.due != null ? inv.due : inv.total, inv.currency) });
+      try {
+        if (navigator.share) { await navigator.share({ title: u("shareTitle"), text, url: inv.payer_link }); return; }
+        await navigator.clipboard.writeText(`${text} ${inv.payer_link}`); toast(u("shareCopied"));
+      } catch (e) { if (e && e.name !== "AbortError") toast(u("shareFailed")); }
+    });
+    return b;
+  }
+
   function showQR(x) {
     const body = $("qr-body"); body.textContent = "";
     const img = new Image(); img.alt = t("qr_title");
@@ -958,7 +983,7 @@
     img.src = "data:image/png;base64," + x.qr_png_base64; body.appendChild(img);
     const linkBox = $("qr-link"); linkBox.textContent = "";
     const row = lastState && lastState.invoices.find(i => i.id === x.invoice_id);
-    if (row && row.payer_link) { const a = el("a", "cell-btn", t("pay_link")); a.href = row.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; linkBox.appendChild(a); }
+    if (row && row.payer_link) { const a = el("a", "cell-btn", t("pay_link")); a.href = row.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; linkBox.append(a, shareButton(row)); }
     try { $("qr").showModal(); } catch (e) { $("qr").setAttribute("open", ""); }
   }
 
@@ -1039,4 +1064,6 @@
     }
     if (ws) briefing();
   })();
+  // installable on the phone (manifest + a network-first service worker that never caches money data)
+  if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
 })();

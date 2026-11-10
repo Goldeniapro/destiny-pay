@@ -396,3 +396,5 @@ body{background:var(--bg)}
 .tour-steps li{padding:10px 12px}
 
 .wh-last{margin:10px 2px 0;font-size:12px;color:var(--muted,#5b6b7f)}
+.metric-pen{display:block;margin:-2px 0 6px;font-size:10px;color:#8fa1b6;font-weight:650}.pen-ref{display:block;margin-top:4px;font-style:normal;font-size:12px;color:#7d93ab;font-weight:650}
+.identity-mark,.workspace-brandmark{background:#0B1F3A;box-shadow:0 8px 20px #0b1f3a26}.logo-ico{fill:none!important;stroke:none!important;width:62%!important;height:62%!important}

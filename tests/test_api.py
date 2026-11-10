@@ -1,3 +1,4 @@
+import json
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -363,3 +364,13 @@ def test_first_payment_is_never_approved_by_voice_in_the_dialog(api):
     r = client.post("/api/confirm/voice", json={"workspace_id": ws, "conversation_id": "11111111-1111-4111-8111-111111111111",
                                                 "confirmation_id": cid, "fingerprint": fp, "text": "yes", "lang": "en"}).json()
     assert r.get("button_only") and biz.bill_view(bill["id"])["status"] == "pending"
+
+
+def test_installable_app_never_caches_money_data(api):
+    client, _ = api
+    sw = client.get("/sw.js")
+    assert sw.status_code == 200 and "javascript" in sw.headers["content-type"] and sw.headers["cache-control"] == "no-cache"
+    assert 'url.pathname.startsWith("/api/")) return' in sw.text  # /api is never intercepted or cached
+    manifest = client.get("/static/manifest.webmanifest")
+    assert manifest.status_code == 200 and json.loads(manifest.text)["start_url"] == "/"
+    assert "content-security-policy" in sw.headers

@@ -7,6 +7,7 @@ os.environ["PAYPAL_CLIENT_SECRET"] = ""
 os.environ["ANTHROPIC_API_KEY"] = "test-key-not-used"
 os.environ["DP_DB_PATH"] = ":memory:"
 os.environ["DP_SCHEDULER"] = "0"
+os.environ["DP_FX"] = "0"  # no network for the reference exchange rate
 os.environ["FISH_API_KEY"] = ""
 os.environ["FISH_VOICE_ID"] = ""
 

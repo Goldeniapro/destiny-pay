@@ -4,9 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-title" content="Destiny Pay">
 <title>Destiny Pay — Todo tu negocio, en una conversación</title>
 <meta name="description" content="Destiny Pay: cobra, paga y anticipa por voz con PayPal. La IA prepara cada operación; tú la autorizas y el servidor la ejecuta.">
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="preload" href="/static/vendor/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/app.css">
 </head>
@@ -26,6 +29,7 @@
   <symbol id="i-wallet" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="15" rx="3"/><path d="M3 9V6a3 3 0 0 1 3-3h12M15 13h6v5h-6a2.5 2.5 0 0 1 0-5Z"/></symbol>
   <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18M6 16l5-6 4 3 6-8"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-logo" viewBox="10 14 50 36"><g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="5.5"><path d="M15 27v10" stroke="#fff"/><path d="M24 20v24" stroke="#fff"/><path d="M33 25v14" stroke="#fff"/><path d="M40 33l6 6 9-14" stroke="#19C2A0"/></g></symbol>
   <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 2 2.1 7.9L22 12l-7.9 2.1L12 22l-2.1-7.9L2 12l7.9-2.1z"/></symbol>
   <symbol id="i-send" viewBox="0 0 24 24"><path d="m21 3-9 18-2.5-7.5L2 11zM21 3 9.5 13.5"/></symbol>
   <symbol id="i-volume" viewBox="0 0 24 24"><path d="M5 9H2v6h3l5 4V5zM14 9a4 4 0 0 1 0 6m3-9a8 8 0 0 1 0 12"/></symbol>
@@ -46,11 +50,11 @@
 <div class="site app" id="app" data-mview="assistant">
 <header class="topbar">
   <a href="/" class="identity" aria-label="Destiny Pay">
-    <span class="identity-mark"><span class="identity-mark-sheen"></span><svg class="ico"><use href="#i-spark"/></svg></span>
+    <span class="identity-mark"><span class="identity-mark-sheen"></span><svg class="ico logo-ico"><use href="#i-logo"/></svg></span>
     <span class="identity-name">destiny<span>pay</span></span>
   </a>
   <span class="topbar-divider" aria-hidden="true"></span>
-  <div class="workspace-brand"><span class="workspace-brandmark"><svg class="ico"><use href="#i-spark"/></svg></span><span><b id="bizName">—</b><small id="bizSub" data-i18n="workspaceSub"></small></span></div>
+  <div class="workspace-brand"><span class="workspace-brandmark"><svg class="ico logo-ico"><use href="#i-logo"/></svg></span><span><b id="bizName">—</b><small id="bizSub" data-i18n="workspaceSub"></small></span></div>
   <div class="topbar-tools">
     <span class="sandbox-pill" id="modePill"><span class="sandbox-dot"></span> PayPal <b>Sandbox</b></span>
     <label class="lang-label" for="lang"><svg class="ico"><use href="#i-globe"/></svg><span class="sr-only" id="lang-label">Idioma</span></label>
@@ -179,7 +183,7 @@
 <div class="modal-backdrop" id="approvalBackdrop" hidden><section class="approval-modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalExplanation">
   <header class="modal-top"><div class="modal-identity"><span class="modal-security-icon"><svg class="ico"><use href="#i-shield"/></svg></span><span><b data-i18n="modalEyebrow"></b><small data-i18n="modalDemo"></small></span></div><button type="button" id="closeModal" class="icon-button"><svg class="ico"><use href="#i-close"/></svg></button></header>
   <div class="modal-body"><span class="modal-badge"><svg class="ico"><use href="#i-lock"/></svg><span data-i18n="modalBadge"></span></span><h2 id="modalTitle"></h2><p id="modalExplanation" data-i18n="modalExplanation"></p>
-    <div class="modal-amount"><small data-i18n="modalAmount"></small><strong id="modalAmountValue"></strong></div>
+    <div class="modal-amount"><small data-i18n="modalAmount"></small><strong id="modalAmountValue"></strong><em class="pen-ref" id="modalPen" hidden></em></div>
     <div class="modal-details"><div><span data-i18n="modalType"></span><b id="modalOperation"></b></div><div><span data-i18n="modalRecipient"></span><b id="modalRecipientValue"></b></div><div><span data-i18n="modalEmail"></span><b id="modalEmailValue"></b></div><div><span data-i18n="modalDescription"></span><b id="modalConceptValue"></b></div></div>
     <p class="modal-warning" id="modalNewRecipient" hidden><svg class="ico"><use href="#i-lock"/></svg><span data-i18n="modalNewRecipient"></span></p>
     <p class="modal-readback" id="modalReadback"></p>
