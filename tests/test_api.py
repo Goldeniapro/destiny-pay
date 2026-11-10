@@ -125,6 +125,11 @@ def test_webhook_marks_invoice_paid(api, monkeypatch):
     assert r.status_code == 200 and biz.invoice_view(inv["id"])["status"] == "PAID"
     again = client.post("/api/paypal/webhook", json=event, headers=cert)  # PayPal retries: handled once
     assert again.status_code == 200 and again.json().get("duplicate") is True
+    # dedupe lives in the database (survives a restart) and each business sees only its own last notification
+    assert main.store.one("SELECT ws FROM webhook_events WHERE id='WH-EVT-1'")["ws"] == ws
+    assert client.get("/api/state", headers={"x-workspace": ws}).json()["webhook_last"]["event"] == "INVOICING.INVOICE.PAID"
+    other = new_ws(client, sample=False)
+    assert client.get("/api/state", headers={"x-workspace": other}).json()["webhook_last"] == {}
     forged = client.post("/api/paypal/webhook", json={**event, "id": "WH-EVT-2"}, headers={"paypal-cert-url": "https://evil.example/cert"})
     assert forged.status_code == 400  # never even reaches PayPal's verify API
     stale = client.post("/api/paypal/webhook", json={**event, "id": "WH-EVT-3"}, headers={**cert, "paypal-transmission-time": "2020-01-01T00:00:00Z"})
@@ -138,11 +143,12 @@ def test_webhook_failure_lets_paypal_retry(api, monkeypatch):
     monkeypatch.setattr(main, "DEMO_MODE", False)
     monkeypatch.setattr(main, "WEBHOOK_ID", "WH")
     monkeypatch.setattr(main.paypal, "verify_webhook", lambda h, e, w: True, raising=False)
-    calls = []
+    calls, original = [], main.store.one
     monkeypatch.setattr(main.store, "one", lambda *a, **k: calls.append(1) or (_ for _ in ()).throw(RuntimeError("db down")))
     event = {"id": "WH-RETRY", "event_type": "INVOICING.INVOICE.PAID", "resource": {"invoice": {"id": "INV2-X"}}}
     with pytest.raises(RuntimeError):
         client.post("/api/paypal/webhook", json=event, headers=hdr)
+    monkeypatch.setattr(main.store, "one", original)
     assert not main._seen("WH-RETRY")  # the failed delivery was not recorded as handled
 
 
@@ -311,5 +317,49 @@ def test_authorization_log_and_webhook_diagnostics(api, monkeypatch):
     assert log[0]["status"] == "done" and log[0]["via"] == "button" and log[0]["receipt"] == conf["fingerprint"][:10] and log[0]["ref"]
     monkeypatch.setattr(main, "DEMO_MODE", False)
     monkeypatch.setattr(main, "WEBHOOK_ID", "WH")
-    client.post("/api/paypal/webhook", json={"id": "x"}, headers={"paypal-cert-url": "https://evil.example/c"})
-    assert client.get("/api/status").json()["webhook_last"]["refused"] == "cert_host"
+    assert client.post("/api/paypal/webhook", json={"id": "x"}, headers={"paypal-cert-url": "https://evil.example/c"}).status_code == 400
+    assert "webhook_last" not in client.get("/api/status").json()  # gate audit: no public signal of other businesses' activity
+    assert client.get("/api/state", headers={"x-workspace": ws}).json()["webhook_last"] == {}
+
+
+def test_inbox_proposes_and_one_click_reminder(api):
+    client, _ = api
+    ws = new_ws(client)  # the sample business
+    st = client.get("/api/state", headers={"x-workspace": ws}).json()
+    kinds = {i["type"] for i in st["inbox"]}
+    assert "bill_overdue" in kinds and any(i["action"].get("kind") == "pay_bill" or i["action"].get("ask") for i in st["inbox"])
+    assert st["confirmations"] == []  # proposing in the inbox never creates or runs anything by itself
+    inv = next(i for i in st["inbox"] if "remind" in i["action"])
+    r = client.post("/api/remind", json={"workspace_id": ws, "invoice_id": inv["action"]["remind"]})
+    assert r.status_code == 200
+    other = new_ws(client)
+    assert client.post("/api/remind", json={"workspace_id": other, "invoice_id": inv["action"]["remind"]}).status_code in (404, 422)
+
+
+def test_spoken_yes_inside_the_dialog_is_decided_by_the_server(api):
+    client, _ = api
+    ws = new_ws(client, sample=False)
+    biz = main.business_factory(ws)
+    inv = biz.draft_invoice("Ana", "ana@example.com", [{"name": "x", "quantity": 1, "unit_price": 5}], "")
+    cid = client.post("/api/proposals", json={"workspace_id": ws, "kind": "send_invoice", "target": inv["id"]}).json()["confirmation_id"]
+    fp = client.get("/api/state", headers={"x-workspace": ws}).json()["confirmations"][0]["fingerprint"]
+    base = {"workspace_id": ws, "conversation_id": "11111111-1111-4111-8111-111111111111", "confirmation_id": cid, "fingerprint": fp, "lang": "en"}
+    r = client.post("/api/confirm/voice", json={**base, "text": "what is the total"}).json()
+    assert r["understood"] is False and biz.invoice_view(inv["id"])["status"] == "DRAFT"
+    r = client.post("/api/confirm/voice", json={**base, "text": "yes", "alternatives": ["no"]}).json()
+    assert r["understood"] is False  # the recognizer wasn't sure
+    r = client.post("/api/confirm/voice", json={**base, "text": "yes send it"}).json()
+    assert r["understood"] and r["approved"] and r["done"] and biz.invoice_view(inv["id"])["status"] != "DRAFT"
+    assert biz.authorizations()[0]["via"] == "voice"
+
+
+def test_first_payment_is_never_approved_by_voice_in_the_dialog(api):
+    client, _ = api
+    ws = new_ws(client, sample=False)
+    biz = main.business_factory(ws)
+    bill = biz.add_bill("Nuevo", "x", 20, biz.today().isoformat(), "none", "new@example.com")
+    cid = client.post("/api/proposals", json={"workspace_id": ws, "kind": "pay_bill", "target": str(bill["id"])}).json()["confirmation_id"]
+    fp = client.get("/api/state", headers={"x-workspace": ws}).json()["confirmations"][0]["fingerprint"]
+    r = client.post("/api/confirm/voice", json={"workspace_id": ws, "conversation_id": "11111111-1111-4111-8111-111111111111",
+                                                "confirmation_id": cid, "fingerprint": fp, "text": "yes", "lang": "en"}).json()
+    assert r.get("button_only") and biz.bill_view(bill["id"])["status"] == "pending"

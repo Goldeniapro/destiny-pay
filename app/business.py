@@ -38,7 +38,7 @@ PAYOUT_UNCLAIMED = {"UNCLAIMED", "PENDING_CLAIM"}
 PAYOUT_BAD = {"FAILED", "RETURNED", "BLOCKED", "DENIED", "REFUNDED", "REVERSED", "CANCELED", "CANCELLED"}
 PAYOUT_HELD = {"ONHOLD"}  # PayPal is reviewing it: still in progress, shown as held
 REFUND_STATUSES = {"REFUNDED", "PARTIALLY_REFUNDED", "MARKED_AS_REFUNDED"}
-GATED_KINDS = ("send_invoice", "cancel_invoice", "pay_bill", "record_payment", "cancel_payout")
+GATED_KINDS = ("send_invoice", "cancel_invoice", "pay_bill", "record_payment", "cancel_payout", "mark_bill_paid")
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 _SPOKEN = [
     (r"\s*\b(arroba|at)\b\s*", "@"),
@@ -257,6 +257,7 @@ class Business:
             newly_paid = self.store.x("UPDATE invoices SET status='PAID' WHERE id=? AND status!='PAID'", (invoice_id,)).rowcount
         self.store.x("UPDATE invoices SET status=?, total=?, due=?, summary=?, updated_at=?, refreshed_at=? WHERE id=?",
                      (s["status"], total, due, json.dumps(meta, ensure_ascii=False), time.time(), time.time(), invoice_id))
+        self._reconcile_payments(invoice_id, row, inv)
         if s["status"] in REFUND_STATUSES:
             self._record_refund(invoice_id, row, inv, total)
         if newly_paid == 1:  # only the refresh that flipped the status announces it
@@ -269,9 +270,28 @@ class Business:
             self.log("invoice_paid", f"{row['contact']} paid {i18n.fmt_money(total, self.currency)} online", "invoice_paid", {"name": row["contact"], "amount": [total, self.currency]}, invoice_id=invoice_id)
         return self.invoice_view(invoice_id)
 
+    def _reconcile_payments(self, invoice_id: str, row: dict, inv: dict) -> None:
+        """Every payment recorded outside PayPal that PayPal lists (payments.transactions, type EXTERNAL) is in the books once,
+        even when PayPal's answer to record_payment was lost (a timeout after PayPal recorded it)."""
+        for tx in ((inv.get("payments") or {}).get("transactions") or []):
+            pid = str(tx.get("payment_id") or "")
+            if not pid or str(tx.get("type", "EXTERNAL")).upper() != "EXTERNAL":
+                continue  # online payments are booked when the invoice becomes PAID
+            try:
+                amount = round(float((tx.get("amount") or {}).get("value") or 0), 2)
+            except (TypeError, ValueError):
+                continue
+            note = str(tx.get("note") or "").lower()
+            method = "YAPE" if note.startswith("yape") else "PLIN" if note.startswith("plin") else "CARD" if note.startswith("card") \
+                else str(tx.get("method") or "OTHER").upper()
+            if amount > 0:
+                self._movement("income", f"Payment on invoice for {row['contact']}", amount, method if method in METHODS else "OTHER",
+                               "sales", row["contact"], f"inv:{invoice_id}:pay:{pid}")
+
     def _record_refund(self, invoice_id: str, row: dict, inv: dict, total: float) -> None:
         """A refunded invoice gives its money back: record what PayPal says was refunded, once."""
-        refunded_raw = (inv.get("refunded_amount") or {}).get("value")
+        refunded_raw = (((inv.get("refunds") or {}).get("refund_amount") or {}).get("value")  # Invoicing v2: refunds.refund_amount
+                        or (inv.get("refunded_amount") or {}).get("value"))
         refunded = float(refunded_raw) if refunded_raw not in (None, "") else total
         done = self.store.one("SELECT COALESCE(SUM(amount),0) s FROM movements WHERE ws=? AND ref LIKE ?",
                               (self.ws, f"inv:{invoice_id}:refund%"))["s"]
@@ -356,8 +376,8 @@ class Business:
         out = self.paypal.record_payment(invoice_id, amount, paypal_method, _clean(" ".join(filter(None, [label, note])), 200),
                                          request_id=request_id, payment_date=self.today().isoformat())
         payment_id = (out or {}).get("payment_id") if isinstance(out, dict) else None
-        self._movement("income", f"Payment on invoice for {row['contact']}", amount, method, "sales", row["contact"],
-                       f"inv:{invoice_id}:pay:{payment_id or uuid.uuid4().hex}")
+        if payment_id:  # same reference PayPal lists it under: the reconciliation below never counts it twice
+            self._movement("income", f"Payment on invoice for {row['contact']}", amount, method, "sales", row["contact"], f"inv:{invoice_id}:pay:{payment_id}")
         view = self._refresh_after(invoice_id, row["status"])
         self.log("payment_recorded", f"{row['contact']} paid {i18n.fmt_money(amount, self.currency)} ({method})", "payment_recorded", {"name": row["contact"], "amount": [amount, self.currency], "method": method}, invoice_id=invoice_id)
         return view
@@ -446,24 +466,31 @@ class Business:
             raise ValidationError("That bill is already paid.")
         self._movement("expense", _clean(f"{b['payee']}: {b['description'] or note}", 200), b["amount"], method, "bills", b["payee"], f"bill:{b['id']}:paid")
         if b["recurrence"] != "none":
-            d = date.fromisoformat(b["due_date"])
-            if b["recurrence"] == "weekly":
-                nxt = d + timedelta(days=7)
-            else:
-                year, month = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
-                anchor = b.get("anchor_day") or d.day
-                nxt = date(year, month, min(anchor, calendar.monthrange(year, month)[1]))
+            d, nxt = date.fromisoformat(b["due_date"]), self._next_due(b)
             self.store.x("INSERT INTO bills(ws,payee,payee_email,description,amount,currency,due_date,recurrence,status,anchor_day,created_at) "
                          "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                          (self.ws, b["payee"], b["payee_email"], b["description"], b["amount"], b["currency"], nxt.isoformat(), b["recurrence"],
                           "pending", b.get("anchor_day") or d.day, time.time()))
         return self.bill_view(b["id"])
 
+    @staticmethod
+    def _next_due(b: dict) -> date:
+        d = date.fromisoformat(b["due_date"])
+        if b["recurrence"] == "weekly":
+            return d + timedelta(days=7)
+        year, month = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
+        anchor = b.get("anchor_day") or d.day
+        return date(year, month, min(anchor, calendar.monthrange(year, month)[1]))
+
+    def _stuck_payout(self, bill_id) -> dict | None:
+        """A payout PayPal took (or may have taken) but hasn't confirmed for 10 minutes: only the owner, after looking in PayPal, settles it."""
+        return self.store.one("SELECT * FROM payouts WHERE bill_id=? AND ws=? AND status IN ('unknown','accepted') AND created_at<? "
+                              "ORDER BY created_at DESC LIMIT 1", (bill_id, self.ws, time.time() - 600))
+
     def mark_bill_paid(self, bill_id, method: str = "CASH", note: str = "") -> dict:
         b = self._bill(bill_id)
         if b["status"] == "processing":
-            stuck = self.store.one("SELECT * FROM payouts WHERE bill_id=? AND ws=? AND status IN ('unknown','accepted') AND created_at<?",
-                                   (b["id"], self.ws, time.time() - 600))
+            stuck = self._stuck_payout(b["id"])
             if method == "PAYPAL" and stuck:  # the owner checked PayPal and saw the payment: record it, nothing new is paid
                 self.store.x("UPDATE payouts SET status='done' WHERE sender_batch_id=?", (stuck["sender_batch_id"],))
                 view = self._settle_bill(b, "PAYPAL", "confirmed by the owner in PayPal", stuck["batch_id"], from_status="processing")
@@ -532,7 +559,14 @@ class Business:
         self.store.x("UPDATE payouts SET status='failed' WHERE sender_batch_id=?", (sender_batch_id,))
         if b["status"] == "paid":  # e.g. an unclaimed payout that PayPal returned later: undo the expense
             self.store.x("DELETE FROM movements WHERE ws=? AND ref=?", (self.ws, f"bill:{b['id']}:paid"))
-            self.store.x("UPDATE bills SET status='pending', method='', paid_at=NULL WHERE id=? AND status='paid'", (b["id"],))
+            if self.store.x("UPDATE bills SET status='pending', method='', paid_at=NULL WHERE id=? AND status='paid'", (b["id"],)).rowcount == 1 \
+                    and b["recurrence"] != "none":
+                # paying it created the next occurrence: undo that too, or paying it again would create a second one
+                nxt = self.store.one("SELECT id FROM bills WHERE ws=? AND status='pending' AND payee=? AND amount=? AND recurrence=? AND due_date=? "
+                                     "AND created_at>=? AND id>? ORDER BY id LIMIT 1",
+                                     (self.ws, b["payee"], b["amount"], b["recurrence"], self._next_due(b).isoformat(), (b["paid_at"] or 0) - 5, b["id"]))
+                if nxt and not self.store.one("SELECT 1 FROM payouts WHERE bill_id=? AND ws=?", (nxt["id"], self.ws)):
+                    self.store.x("DELETE FROM bills WHERE id=? AND ws=? AND status='pending'", (nxt["id"], self.ws))
         else:
             self.store.x("UPDATE bills SET status='pending' WHERE id=? AND status='processing'", (b["id"],))
 
@@ -904,6 +938,21 @@ class Business:
             details = {"customer": view["customer"], "email": view["email"], "amount": cents / 100, "currency": view["currency"],
                        "method": method, "amount_cents": cents, "invoice_id": invoice_id, "status": view["status"], "due_cents": due_cents}
             return details, f"{invoice_id}|{cents}|{method}"
+        if kind == "mark_bill_paid":
+            # target = "<bill id>|<method>": a bill paid outside PayPal, or (PAYPAL) a stuck payout the owner saw paid in PayPal
+            bill_id, _, method = str(target).partition("|")
+            if not bill_id.isdigit() or method not in METHODS:
+                raise ValidationError("Say how the bill was paid: cash, transfer, Yape, Plin or card.")
+            b = self.bill_view(bill_id)
+            if method == "PAYPAL":
+                if b["status"] != "processing" or not self._stuck_payout(b["id"]):
+                    raise ValidationError("Only a PayPal payment PayPal hasn't confirmed for a while can be marked as paid by the owner.")
+            elif b["status"] != "pending":
+                raise ValidationError("That bill is already paid or its PayPal payment is in progress.")
+            details = {"payee": b["payee"], "email": b["payee_email"], "amount": b["amount"], "currency": b["currency"],
+                       "description": b["description"], "method": method, "amount_cents": int(round(float(b["amount"]) * 100)),
+                       "bill_id": b["id"], "status": b["status"]}
+            return details, f"{b['id']}|{method}"
         if kind == "cancel_payout":
             b = self.bill_view(target)
             p = self.store.one("SELECT * FROM payouts WHERE ws=? AND bill_id=? ORDER BY created_at DESC LIMIT 1", (self.ws, b["id"]))
@@ -993,14 +1042,24 @@ class Business:
         if row is None or row["status"] != "pending":
             return False, i18n.t("c_gone", lang), {}
         new_status = "executing" if approve else "denied"
-        if self.store.x("UPDATE confirmations SET status=?, resolved_at=? WHERE id=? AND status='pending'", (new_status, time.time(), cid)).rowcount != 1:
-            return False, i18n.t("c_gone", lang), {}  # already handled (double click, button + voice): never run twice
+        subject = str(row["target"]).split("|")[0]  # the invoice or bill it acts on
+        with self.store.lock:
+            if approve and self.store.one("SELECT 1 FROM confirmations WHERE ws=? AND status='executing' AND id!=? AND (target=? OR target LIKE ?)",
+                                          (self.ws, cid, subject, subject + "|%")):
+                return False, i18n.t("c_busy", lang), {}  # one operation per invoice or bill at a time: no two validate against the same balance
+            if self.store.x("UPDATE confirmations SET status=?, resolved_at=? WHERE id=? AND status='pending'", (new_status, time.time(), cid)).rowcount != 1:
+                return False, i18n.t("c_gone", lang), {}  # already handled (double click, button + voice): never run twice
         if approve:
             # Claimed first, validated second: nothing can change between the check and the execution unnoticed.
-            stale = fingerprint is not None and fingerprint != row["fingerprint"]
+            stale = False
             try:
                 current, _ = self._proposal(row["kind"], row["target"])
-                stale = stale or self._fingerprint(row["kind"], row["target"], current) != row["fingerprint"]
+                stale = self._fingerprint(row["kind"], row["target"], current) != row["fingerprint"]
+                if not stale and fingerprint is not None and fingerprint != row["fingerprint"]:
+                    # the operation is intact but the approval was for something else (an old screen, a forged request):
+                    # run nothing and keep the card, so a bad request can't void the owner's pending authorization
+                    self.store.x("UPDATE confirmations SET status='pending', resolved_at=NULL WHERE id=? AND status='executing'", (cid,))
+                    return False, i18n.t("c_other_screen", lang), {}
                 if not stale and row["kind"] in ("send_invoice", "cancel_invoice"):
                     try:
                         stale = not self._paypal_matches(row["target"], json.loads(row["details"]))  # what PayPal itself holds
@@ -1020,6 +1079,10 @@ class Business:
             self.log("confirmation_denied", f"Owner declined: {row['kind']}", "confirmation_denied", {}, confirmation_id=cid)
             return False, i18n.t("c_denied", lang), {}
         rid = f"dp-{cid}"  # one PayPal-Request-Id per authorization: a retry of this approval can never act twice
+        if row["kind"] == "record_payment":
+            # derived from the operation itself (invoice, amount, balance due), not from the approval: re-authorizing the same
+            # payment after a lost answer reuses the id, so PayPal can't record it twice
+            rid = f"dp-rp-{details['invoice_id']}-{details['amount_cents']}-{details['due_cents']}"
         try:
             if row["kind"] == "send_invoice":
                 result = self.send_invoice(row["target"], request_id=rid)
@@ -1030,6 +1093,9 @@ class Business:
             elif row["kind"] == "record_payment":
                 result = self.record_payment(details["invoice_id"], details["amount"], details["method"], "", request_id=rid)
                 reply = i18n.t("c_record_payment", lang, name=details["customer"], amount=i18n.fmt_money(details["amount"], details["currency"], lang))
+            elif row["kind"] == "mark_bill_paid":
+                result = self.mark_bill_paid(details["bill_id"], details["method"])
+                reply = i18n.t("c_mark_bill_paid", lang, payee=details["payee"], amount=i18n.fmt_money(details["amount"], details["currency"], lang))
             elif row["kind"] == "cancel_payout":
                 result = self.cancel_unclaimed_payout(row["target"], request_id=rid)
                 reply = i18n.t("c_cancel_payout", lang, payee=details["payee"], amount=i18n.fmt_money(details["amount"], details["currency"], lang))
@@ -1040,6 +1106,8 @@ class Business:
         except Exception as e:  # never leave a confirmation stuck in "executing"
             err = str(e) if isinstance(e, (PayPalError, ValidationError)) else f"unexpected error ({e.__class__.__name__})"
             self.store.x("UPDATE confirmations SET status='failed', result=? WHERE id=?", (err[:300], cid))
+            if row["kind"] == "record_payment":  # PayPal may have recorded it: re-read the invoice on the next tick
+                self.store.x("UPDATE invoices SET refreshed_at=0 WHERE id=? AND ws=?", (details["invoice_id"], self.ws))
             self.log("confirmation_failed", f"{row['kind']} failed: {err}", "confirmation_failed", {"error": err[:120]}, confirmation_id=cid)
             return False, i18n.t("c_failed", lang, error=err[:200]), {}
         ref = str(result.get("number") or result.get("batch_id") or result.get("id") or "")[:80] if isinstance(result, dict) else ""
@@ -1049,6 +1117,39 @@ class Business:
         self.log("authorized", f"Authorized by the owner ({via}): {row['kind']} · receipt {row['fingerprint'][:10]} · PayPal {ref}",
                  "authorized", {"kind": row["kind"], "via": via, "receipt": row["fingerprint"][:10], "ref": ref}, confirmation_id=cid)
         return True, reply, result
+
+    def inbox(self, states: dict | None = None) -> list[dict]:
+        """What needs the owner's attention, each with the one action that resolves it.
+
+        Code proposes, never the model: an action here only opens the authorization dialog (or sends PayPal's
+        own reminder when the owner clicks), nothing runs by itself."""
+        today = self.today()
+        soon = (today + timedelta(days=3)).isoformat()
+        states = states if states is not None else self._payout_states()
+        items: list[dict] = []
+        for b in self.list_bills("all"):
+            if b["status"] == "processing" and self._stuck_payout(b["id"]):
+                # PayPal took it but never confirmed: the owner looks in PayPal and, if it was paid, records it (authorized)
+                items.append({"type": "payout_check", "who": b["payee"], "amount": b["amount"], "currency": b["currency"], "date": b["due_date"],
+                              "action": {"kind": "mark_bill_paid", "target": f"{b['id']}|PAYPAL"}, "rank": 1})
+            elif b["unclaimed"]:
+                items.append({"type": "unclaimed", "who": b["payee"], "amount": b["amount"], "currency": b["currency"], "date": b["due_date"],
+                              "action": {"kind": "cancel_payout", "target": str(b["id"])}, "rank": 1})
+            elif b["status"] == "pending" and b["due_date"] <= soon:
+                has_email = bool(EMAIL_RE.match(b["payee_email"] or ""))
+                items.append({"type": "bill_overdue" if b["overdue"] else "bill_due", "who": b["payee"], "amount": b["amount"],
+                              "currency": b["currency"], "date": b["due_date"], "rank": 0 if b["overdue"] else 2,
+                              "action": {"kind": "pay_bill", "target": str(b["id"])} if has_email else {"ask": "email", "who": b["payee"]}})
+        for i in self.list_invoices("all"):
+            if i["status"] not in UNPAID_STATUSES:
+                continue
+            week = (today + timedelta(days=7)).isoformat()
+            if i["overdue"] or (i["due_date"] and i["due_date"] <= week):
+                items.append({"type": "invoice_overdue" if i["overdue"] else "invoice_due", "who": i["customer"], "amount": i["due"],
+                              "currency": i["currency"], "date": i["due_date"], "rank": 0 if i["overdue"] else 3,
+                              "action": {"remind": i["id"]}})
+        items.sort(key=lambda x: (x["rank"], x["date"] or ""))
+        return items
 
     def authorizations(self, limit: int = 30) -> list[dict]:
         """The authorization log: every proposal and what the owner decided, newest first."""

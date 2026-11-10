@@ -99,6 +99,11 @@ class FakePayPal:
         return {}
 
     def record_payment(self, invoice_id, amount, method="CASH", note="", request_id="", payment_date=""):
+        seen = getattr(self, "_idempotent", None)
+        if seen is None:
+            seen = self._idempotent = {}
+        if request_id and request_id in seen:  # like PayPal: the same PayPal-Request-Id returns the first answer, nothing new
+            return seen[request_id]
         inv = self._get(invoice_id)
         if inv["status"] in {"DRAFT", "CANCELLED"} | PAID_STATUSES:
             raise PayPalError("PayPal 422: CANNOT_RECORD_PAYMENT")
@@ -108,8 +113,15 @@ class FakePayPal:
         due -= float(amount)
         inv["due_amount"]["value"] = f"{due:.2f}"
         inv["status"] = "MARKED_AS_PAID" if due < 0.005 else "PARTIALLY_PAID"
+        pid = f"EXTR-{uuid.uuid4().hex[:16].upper()}"
+        pays = inv.setdefault("payments", {"transactions": []})
+        pays.setdefault("transactions", []).append({"type": "EXTERNAL", "payment_id": pid, "payment_date": payment_date, "method": method,
+                                                    "amount": {"currency_code": inv["due_amount"].get("currency_code", "USD"), "value": f"{float(amount):.2f}"},
+                                                    **({"note": note} if note else {})})
         self._save(inv)
-        return {"payment_id": f"DEMO-PAY-{uuid.uuid4().hex[:10]}"}
+        if request_id:
+            seen[request_id] = {"payment_id": pid}
+        return {"payment_id": pid}
 
     def qr_code(self, invoice_id, size=300):
         if self._get(invoice_id)["status"] == "DRAFT":

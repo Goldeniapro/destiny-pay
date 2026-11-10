@@ -357,7 +357,6 @@ def status():
         "ai_ready": ai_configured(),
         "voice": {"tts": voice.tts_enabled, "stt": voice.stt_enabled},
         "webhooks": bool(WEBHOOK_ID) and not DEMO_MODE,
-        "webhook_last": dict(WEBHOOK_LAST),
         "langs": list(LANGS),
         "build": (os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("RENDER_GIT_COMMIT") or "")[:7],
     }
@@ -434,6 +433,8 @@ def state(request: Request, ws: str = Header(alias="x-workspace", **WS_ID), lang
         "activity": [render_activity(a, lang) for a in store.q("SELECT id, at, kind, text, data FROM activity WHERE ws=? ORDER BY id DESC LIMIT 40", (ws,))],
         "confirmations": [{**c, "readback": readback(c, lang)} for c in biz.pending_confirmations()],
         "authorizations": biz.authorizations(),
+        "webhook_last": webhook_last(biz.ws),
+        "inbox": biz.inbox(),
         "movements": [{"id": m["id"], "kind": m["kind"], "description": m["description"], "amount": m["amount"], "currency": m["currency"],
                        "method": m["method"], "category": m["category"], "contact": m["contact"], "at": m["at"]}
                       for m in store.q("SELECT * FROM movements WHERE ws=? ORDER BY at DESC LIMIT 12", (ws,))],
@@ -443,11 +444,17 @@ def state(request: Request, ws: str = Header(alias="x-workspace", **WS_ID), lang
     }
 
 
+def webhook_last(ws: str) -> dict:
+    """This business's last verified PayPal notification (only its own: never another business's activity)."""
+    r = store.one("SELECT event, at FROM webhook_events WHERE ws=? ORDER BY at DESC LIMIT 1", (ws,))
+    return {"event": r["event"], "at": int(r["at"])} if r else {}
+
+
 def readback(conf: dict, lang: str) -> str:
     """What an approval will do, in the code's own words (from the stored proposal, never from the model)."""
     d = conf.get("details") or {}
     key = {"send_invoice": "rb_send_invoice", "cancel_invoice": "rb_cancel_invoice", "pay_bill": "rb_pay_bill",
-           "record_payment": "rb_record_payment", "cancel_payout": "rb_cancel_payout"}.get(conf.get("kind", ""))
+           "record_payment": "rb_record_payment", "cancel_payout": "rb_cancel_payout", "mark_bill_paid": "rb_mark_bill_paid"}.get(conf.get("kind", ""))
     amount = d.get("total", d.get("amount"))
     if not key or amount is None:
         return ""
@@ -579,10 +586,7 @@ def transcribe(request: Request, workspace_id: str = Form(**WS_ID), lang: str = 
 
 
 # --- PayPal webhooks ------------------------------------------------------------------------------
-WEBHOOK_LAST: dict = {}  # when the last delivery arrived and whether it verified
 CERT_HOSTS = ("https://api.paypal.com/", "https://api.sandbox.paypal.com/", "https://api-m.paypal.com/", "https://api-m.sandbox.paypal.com/")
-_seen_events: OrderedDict[str, float] = OrderedDict()
-_seen_lock = threading.Lock()
 
 
 def _fresh(stamp: str, window: float = 900) -> bool:
@@ -596,18 +600,16 @@ def _fresh(stamp: str, window: float = 900) -> bool:
 
 
 def _seen(event_id: str) -> bool:
-    with _seen_lock:
-        return bool(event_id) and event_id in _seen_events
+    return bool(event_id) and store.one("SELECT 1 FROM webhook_events WHERE id=?", (event_id[:120],)) is not None
 
 
-def _mark_seen(event_id: str) -> None:
-    """Only after the event was handled: if handling fails, PayPal's retry still gets through."""
+def _mark_seen(event_id: str, ws: str = "", event: str = "") -> None:
+    """Only after the event was handled (if handling fails, PayPal's retry still gets through). Kept in the database,
+    so a restart doesn't make an old delivery new; each business sees only its own events (Security view)."""
     if not event_id:
         return
-    with _seen_lock:
-        _seen_events[event_id] = time.time()
-        while len(_seen_events) > 5000:
-            _seen_events.popitem(last=False)
+    store.x("INSERT OR IGNORE INTO webhook_events(id, ws, event, at) VALUES(?,?,?,?)", (event_id[:120], ws, event[:60], time.time()))
+    store.x("DELETE FROM webhook_events WHERE at<?", (time.time() - 45 * 86400,))
 
 
 @app.post("/api/paypal/webhook")
@@ -617,9 +619,8 @@ async def paypal_webhook(request: Request):
     limit(request, "webhook", "webhook_all")  # per sender first, so one forger can't starve PayPal's real deliveries
     cert_url = str(request.headers.get("paypal-cert-url", ""))
     if not cert_url.startswith(CERT_HOSTS) or not _fresh(request.headers.get("paypal-transmission-time", "")):
-        # diagnostics only: which cheap check refused it (no payload, no secrets)
-        WEBHOOK_LAST.update({"at": int(time.time()), "verified": False,
-                             "refused": "cert_host" if not cert_url.startswith(CERT_HOSTS) else "transmission_time"})
+        # diagnostics in the server log only (a public signal would tell anyone when other businesses get paid)
+        log.warning("webhook refused before verification: %s", "cert_host" if not cert_url.startswith(CERT_HOSTS) else "transmission_time")
         raise HTTPException(400, "Signature verification failed")  # cheap checks before calling PayPal
     raw = (await request.body()).decode("utf-8", "replace")
     try:
@@ -638,7 +639,7 @@ def _handle_webhook(headers: dict, event: dict, raw: str = "") -> dict:
     except PayPalError as e:
         log.warning("webhook verification call failed: %s", str(e)[:200])
         genuine = False
-    WEBHOOK_LAST.update({"at": int(time.time()), "event": str(event.get("event_type", ""))[:60], "verified": bool(genuine), "refused": ""})
+    log.info("webhook %s verified=%s", str(event.get("event_type", ""))[:60], bool(genuine))
     if not genuine:
         raise HTTPException(400, "Signature verification failed")
     event_id = str(event.get("id", ""))
@@ -646,10 +647,12 @@ def _handle_webhook(headers: dict, event: dict, raw: str = "") -> dict:
         return {"ok": True, "duplicate": True}
     kind = str(event.get("event_type", ""))
     resource = event.get("resource") or {}
+    owner = ""
     if kind.startswith("INVOICING.INVOICE."):
         invoice_id = (resource.get("invoice") or {}).get("id") or resource.get("id")
         row = store.one("SELECT ws FROM invoices WHERE id=?", (str(invoice_id),)) if invoice_id else None
         if row:
+            owner = row["ws"]
             try:
                 business_factory(row["ws"]).refresh_invoice(invoice_id)
             except PayPalError:
@@ -660,33 +663,96 @@ def _handle_webhook(headers: dict, event: dict, raw: str = "") -> dict:
         status_value = header.get("batch_status") or resource.get("transaction_status") or kind.rsplit(".", 1)[-1]
         row = store.one("SELECT ws FROM payouts WHERE batch_id=?", (str(batch_id),)) if batch_id else None
         if row:  # PayPal's own status decides: settle the bill, or put it back to pending and tell the owner
+            owner = row["ws"]
             store.x("UPDATE payouts SET checked_at=0 WHERE batch_id=?", (str(batch_id),))  # an unclaimed payout is rechecked now, not in 30 min
             try:
                 business_factory(row["ws"]).check_payouts()
             except PayPalError:
                 log.warning("payout check after webhook failed for %s (%s)", batch_id, status_value)
-    _mark_seen(event_id)
+    _mark_seen(event_id, owner, kind)
     return {"ok": True}
 
 
 # --- proposals from the tables (no AI): they still go through the authorization dialog ----------------
 class ProposalIn(BaseModel):
     workspace_id: str = Field(**WS_ID)
-    kind: str = Field(pattern="^(send_invoice|cancel_invoice|pay_bill|cancel_payout)$")
-    target: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9-]+$")
+    kind: str = Field(pattern="^(send_invoice|cancel_invoice|pay_bill|cancel_payout|mark_bill_paid)$")
+    target: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9-]+(\|[A-Z_]{3,20})?$")
 
 
 @app.post("/api/proposals")
 def propose(body: ProposalIn, request: Request):
     limit(request, "chat", "chat_all", "money_day", ws=body.workspace_id)
+    if ("|" in body.target) != (body.kind == "mark_bill_paid"):  # only "mark paid" carries a method
+        raise HTTPException(422, "Invalid target")
     biz = open_business(body.workspace_id)
     try:
         out = biz.request_confirmation(body.kind, body.target, "table")
     except ValidationError as e:
         raise HTTPException(422, str(e)[:300])
-    except PayPalError:
-        raise HTTPException(502, "PayPal did not answer")
+    except PayPalError as e:
+        raise HTTPException(404 if "does not belong" in str(e) else 502, "Not found" if "does not belong" in str(e) else "PayPal did not answer")
     return {"confirmation_id": out["confirmation_id"]}
+
+
+class RemindIn(BaseModel):
+    workspace_id: str = Field(**WS_ID)
+    invoice_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9-]+$")
+
+
+@app.post("/api/remind")
+def remind(body: RemindIn, request: Request):
+    """The owner clicked "Remind": PayPal's own reminder email, no free text (PayPal allows 2 per invoice per day)."""
+    limit(request, "chat", "chat_all", "money_day", ws=body.workspace_id)
+    biz = open_business(body.workspace_id)
+    try:
+        out = biz.remind_invoice(body.invoice_id)
+    except ValidationError as e:
+        raise HTTPException(422, str(e)[:300])
+    except PayPalError as e:
+        if "does not belong" in str(e):
+            raise HTTPException(404, "Not found")
+        raise HTTPException(422 if getattr(e, "status", 0) in (400, 422) else 502, "PayPal refused the reminder (it allows 2 per invoice per day)")
+    return {"ok": True, "customer": out["customer"]}
+
+
+class VoiceConfirmIn(BaseModel):
+    workspace_id: str = Field(**WS_ID)
+    conversation_id: str = Field(**CONV_ID)
+    confirmation_id: str = Field(min_length=1, max_length=40)
+    fingerprint: str = Field(min_length=8, max_length=64)
+    text: str = Field(min_length=1, max_length=300)
+    alternatives: list[str] = Field(default_factory=list, max_length=3)
+    lang: str = "es"
+
+
+@app.post("/api/confirm/voice")
+def confirm_by_voice(body: VoiceConfirmIn, request: Request):
+    """A spoken answer inside the authorization dialog. The server decides what it means, with the same closed
+    vocabulary as the conversation, and never for a first payment to an email (that one needs the button)."""
+    limit(request, "chat", "chat_all", ws=body.workspace_id)
+    biz = open_business(body.workspace_id)
+    lang = lang_of(body.lang)
+    conf = next((c for c in biz.pending_confirmations() if c["id"] == body.confirmation_id), None)
+    if conf is None:
+        raise HTTPException(404, "Not found")
+    if conf.get("new_recipient"):
+        return {"understood": False, "button_only": True, "reply": i18n.t("button_only_new", lang)}
+    verdict = i18n.classify_reply(body.text, conf["kind"])
+    if verdict == "yes" and any(i18n.classify_reply(a, conf["kind"]) != "yes" for a in body.alternatives if a.strip()):
+        verdict = "other"  # the recognizer wasn't sure it heard a yes
+    if verdict not in ("yes", "no"):
+        return {"understood": False, "reply": i18n.t("voice_not_understood", lang)}
+    paying = verdict == "yes" and conf["kind"] == "pay_bill"
+    if verdict == "yes":
+        limit(request, "money_day", ws=body.workspace_id)
+    if paying:
+        charge_payout(client_ip(request), conf)  # the same per-visitor allowance as the button
+    out = agent.confirm(body.workspace_id, body.conversation_id, body.confirmation_id, verdict == "yes", lang,
+                        body.fingerprint if verdict == "yes" else None, via="voice")
+    if paying and not out.get("done"):
+        payouts_per_ip.charge(client_ip(request), -float((conf.get("details") or {}).get("amount") or 0))
+    return {"understood": True, "approved": verdict == "yes", **out}
 
 
 # --- demo helper ----------------------------------------------------------------------------------

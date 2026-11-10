@@ -81,7 +81,7 @@ Browser (Web Speech / MediaRecorder, audio player, AG Grid dashboard)
    │  /api/chat · /api/confirm · /api/state · /api/speech · /api/transcribe
    ▼
 FastAPI ── rate limits · budgets · background scheduler · verified PayPal webhooks
-   ├── Claude (claude-opus-5-5) tool loop: 20 strict tools, prompt caching, server-side fallback
+   ├── Claude (claude-opus-5-5) tool loop: 22 strict tools, prompt caching, server-side fallback
    ├── Business layer: memory, confirmations, ledger, reminders, financial overview  ──►  SQLite
    ├── PayPal REST: Invoicing v2 · Payouts · Webhooks verification (sandbox)
    └── Fish Audio: text-to-speech (a native voice per language) · speech-to-text

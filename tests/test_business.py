@@ -264,14 +264,6 @@ def test_confirmation_never_stuck_and_refresh_failure_is_not_a_failure(biz, monk
 def test_record_payment_uses_paypal_payment_id(biz, monkeypatch):
     inv = draft(biz)
     biz.send_invoice(inv["id"])
-    ids = iter(["P1", "P2"])
-    original = biz.paypal.record_payment
-
-    def rec(i, amount, method="CASH", note="", **kw):
-        original(i, amount, method, note, **kw)
-        return {"payment_id": next(ids)}
-
-    monkeypatch.setattr(biz.paypal, "record_payment", rec)
     biz.record_payment(inv["id"], 10, "CASH")
     biz.record_payment(inv["id"], 10, "CASH")
     assert biz.overview()["income"] == 20
@@ -577,9 +569,12 @@ def test_approval_with_another_operations_fingerprint_is_refused(biz):
     bill = biz.add_bill("Textiles", "Hilo", 180, biz.today().isoformat(), "none", "t@example.com")
     req = biz.request_confirmation("pay_bill", str(bill["id"]))
     done, reply, _ = biz.resolve_confirmation(req["confirmation_id"], True, "es", fingerprint="0" * 32)
-    assert not done and "cambió" in reply and biz.bill_view(bill["id"])["status"] == "pending"
+    assert not done and "no coincide" in reply and biz.bill_view(bill["id"])["status"] == "pending"
     assert biz.paypal.payouts == {}
-    assert biz.resolve_confirmation(req["confirmation_id"], True, "es", fingerprint=req["fingerprint"])[0] is False  # void now
+    # gate audit (live): a mismatched approval can't void the owner's card; the real one still works, once
+    assert [c["id"] for c in biz.pending_confirmations()] == [req["confirmation_id"]]
+    assert biz.resolve_confirmation(req["confirmation_id"], True, "es", fingerprint=req["fingerprint"])[0] is True
+    assert biz.resolve_confirmation(req["confirmation_id"], True, "es", fingerprint=req["fingerprint"])[0] is False
 
 
 def test_changing_the_bill_after_the_proposal_voids_the_approval(biz):
@@ -724,7 +719,7 @@ def test_refunded_invoice_takes_the_income_back_once(biz, monkeypatch):
     assert biz.overview()["income"] == 90
     stored = biz.paypal._get(inv["id"])
     stored["status"] = "PARTIALLY_REFUNDED"
-    stored["refunded_amount"] = {"currency_code": "USD", "value": "30.00"}
+    stored["refunds"] = {"refund_amount": {"currency_code": "USD", "value": "30.00"}}  # Invoicing v2 shape
     biz.paypal._save(stored)
     biz.refresh_invoice(inv["id"])
     biz.refresh_invoice(inv["id"])  # twice: recorded once
@@ -750,3 +745,93 @@ def test_each_authorization_uses_its_own_paypal_request_id(biz, monkeypatch):
     req = biz.request_confirmation("send_invoice", inv["id"])
     biz.resolve_confirmation(req["confirmation_id"], True, "es", req["fingerprint"])
     assert seen == [f"dp-{req['confirmation_id']}"]
+
+
+# --- v7 phase 1 gate audit -------------------------------------------------------------------
+def test_marking_a_bill_paid_needs_an_authorization(biz):
+    bill = biz.add_bill("Marta", "Alquiler", 300, biz.today().isoformat(), "none")
+    req = biz.request_confirmation("mark_bill_paid", f"{bill['id']}|YAPE")
+    assert biz.bill_view(bill["id"])["status"] == "pending" and biz.overview()["expense"] == 0  # nothing until the owner says so
+    assert req["details"]["method"] == "YAPE" and req["details"]["amount_cents"] == 30000
+    with pytest.raises(ValidationError):
+        biz.request_confirmation("mark_bill_paid", f"{bill['id']}|PAYPAL")  # PayPal payments go through request_pay_bill
+    done, _, _ = biz.resolve_confirmation(req["confirmation_id"], True, "es", req["fingerprint"])
+    assert done and biz.bill_view(bill["id"])["status"] == "paid" and biz.overview()["expense"] == 300
+
+
+def test_stuck_payout_gets_an_authorized_way_out(biz, monkeypatch):
+    bill = biz.add_bill("Proveedor", "x", 40, biz.today().isoformat(), "none", "p@example.com")
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda *a, **k: (_ for _ in ()).throw(PayPalError("timeout", uncertain=True)))
+    with pytest.raises(ValidationError):
+        biz.pay_bill_with_paypal(bill["id"])
+    with pytest.raises(ValidationError):  # too early: PayPal may still answer
+        biz.request_confirmation("mark_bill_paid", f"{bill['id']}|PAYPAL")
+    biz.store.x("UPDATE payouts SET created_at=created_at-700 WHERE bill_id=?", (bill["id"],))
+    assert any(i["type"] == "payout_check" and i["action"] == {"kind": "mark_bill_paid", "target": f"{bill['id']}|PAYPAL"} for i in biz.inbox())
+    req = biz.request_confirmation("mark_bill_paid", f"{bill['id']}|PAYPAL")
+    assert biz.resolve_confirmation(req["confirmation_id"], True, "es", req["fingerprint"])[0]
+    assert biz.bill_view(bill["id"])["status"] == "paid"
+
+
+def test_cancelled_payout_on_a_recurring_bill_does_not_duplicate_the_next_one(biz):
+    bill = biz.add_bill("Casero", "Alquiler", 120, biz.today().isoformat(), "monthly", "nobody@unclaimed.example")
+    biz.pay_bill_with_paypal(bill["id"])
+    biz.check_payouts()
+    assert len(biz.list_bills("pending")) == 1  # next month's rent
+    req = biz.request_confirmation("cancel_payout", str(bill["id"]))
+    assert biz.resolve_confirmation(req["confirmation_id"], True, "es", req["fingerprint"])[0]
+    pending = biz.list_bills("pending")
+    assert [b["id"] for b in pending] == [bill["id"]]  # this month's is due again, next month's is gone
+    biz.mark_bill_paid(bill["id"], "CASH")
+    assert len(biz.list_bills("pending")) == 1  # paying it again creates exactly one next occurrence
+
+
+def test_record_payment_with_a_lost_answer_is_booked_once_and_never_recorded_twice(biz, monkeypatch):
+    inv = draft(biz)
+    biz.send_invoice(inv["id"])
+    seen_ids = []
+    original = biz.paypal.record_payment
+
+    def lost(*a, request_id="", **kw):
+        seen_ids.append(request_id)
+        original(*a, request_id=request_id, **kw)  # PayPal records it...
+        raise PayPalError("PayPal timeout", uncertain=True)  # ...but the answer never arrives
+
+    monkeypatch.setattr(biz.paypal, "record_payment", lost)
+    target = f"{inv['id']}|1000|CASH"
+    req = biz.request_confirmation("record_payment", target)
+    assert biz.resolve_confirmation(req["confirmation_id"], True, "es", req["fingerprint"])[0] is False
+    assert biz.overview()["income"] == 0
+    # the owner tries again before the books caught up: same operation, same PayPal-Request-Id
+    req2 = biz.request_confirmation("record_payment", target)
+    biz.resolve_confirmation(req2["confirmation_id"], True, "es", req2["fingerprint"])
+    assert len(seen_ids) == 2 and seen_ids[0] == seen_ids[1]
+    monkeypatch.setattr(biz.paypal, "record_payment", original)
+    biz.refresh_invoice(inv["id"])  # what the scheduler does: PayPal's own list of payments settles the books
+    biz.refresh_invoice(inv["id"])
+    assert biz.overview()["income"] == 10
+
+
+def test_two_payments_on_one_invoice_never_validate_against_the_same_balance(biz):
+    inv = draft(biz)
+    biz.send_invoice(inv["id"])
+    due = int(round(biz.invoice_view(inv["id"])["due"] * 100))
+    a = biz.request_confirmation("record_payment", f"{inv['id']}|{due - 100}|CASH")
+    b = biz.request_confirmation("record_payment", f"{inv['id']}|{due - 100}|YAPE")
+    biz.store.x("UPDATE confirmations SET status='executing' WHERE id=?", (a["confirmation_id"],))  # a is running right now
+    done, reply, _ = biz.resolve_confirmation(b["confirmation_id"], True, "en", b["fingerprint"])
+    assert not done and "Another authorization" in reply
+    assert [c["id"] for c in biz.pending_confirmations()] == [b["confirmation_id"]]  # b waits, it isn't lost
+
+
+def test_partial_refund_uses_paypal_refund_amount(biz):
+    inv = draft(biz)
+    biz.send_invoice(inv["id"])
+    biz.demo_mark_paid(inv["id"])
+    stored = biz.paypal._get(inv["id"])
+    stored["status"] = "PARTIALLY_REFUNDED"
+    stored["refunds"] = {"refund_amount": {"currency_code": "USD", "value": "12.50"}}
+    biz.paypal._save(stored)
+    before = biz.overview()["expense"]
+    biz.refresh_invoice(inv["id"])
+    assert round(biz.overview()["expense"] - before, 2) == 12.5

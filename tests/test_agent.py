@@ -213,7 +213,7 @@ def test_every_tool_runs(setup):
         ("request_record_payment", {"invoice_id": inv["id"], "amount": 10, "method": "PLIN"}),
         ("add_bill", {"payee": "Marta", "description": "Alquiler", "amount": 300, "due_date": biz.today().isoformat(), "recurrence": "monthly", "payee_email": "marta@example.com"}),
         ("list_bills", {"status": "pending", "within_days": 30}), ("request_pay_bill", {"bill_id": 1}),
-        ("mark_bill_paid", {"bill_id": 1, "method": "CASH", "note": ""}),
+        ("request_mark_bill_paid", {"bill_id": 1, "method": "CASH"}),
         ("record_movement", {"kind": "expense", "description": "Taxi", "amount": 8, "method": "CASH", "category": "transport", "contact": ""}),
         ("create_reminder", {"text": "Llamar", "due_at": "2099-01-01T10:00", "kind": "owner_note", "invoice_id": ""}),
         ("list_reminders", {"include_done": False}), ("remember", {"fact": "Lucho paga con Plin"}),
@@ -343,3 +343,46 @@ def test_paypal_is_never_a_manual_payment_method(setup):
     with pytest.raises(ValidationError, match="recorded by PayPal"):
         biz.record_payment(inv["id"], 45, "PAYPAL")
     assert biz.bill_view(bill["id"])["status"] == "pending"
+
+
+def test_show_view_drives_the_interface(setup):
+    from app.agent import run_tool
+    biz, _ = setup
+    out, ui = run_tool(biz, "conv", "show_view", {"view": "invoices", "filter": "overdue"})
+    assert ui == {"view": "invoices", "filter": "overdue"} and out["shown"] == "invoices"
+
+
+def test_spoken_yes_records_a_cash_payment_only_after_the_code_read_it_back(setup):
+    """Gate audit H1: the record_payment readback names the method, and a "yes" is armed only once it was said."""
+    biz, make = setup
+    inv = biz.draft_invoice("Sarah Miller", "sarah@example.com", DRAFT["items"], "")
+    biz.send_invoice(inv["id"])
+    agent, _ = make([tool("request_record_payment", {"invoice_id": inv["id"], "amount": 10, "method": "YAPE"}), text("Listo para registrar."), text("ok")])
+    res = agent.chat(biz.ws, "conv-rp", "Sarah me pagó 10 por Yape", "es")
+    assert res["reply"].endswith("Para confirmar: registrar que Sarah Miller pagó 10,00 USD en Yape. Di «sí» o toca Autorizar.")
+    res = agent.chat(biz.ws, "conv-rp", "sí", "es")
+    assert biz.overview()["income"] == 10
+
+
+def test_spoken_yes_cancels_an_unclaimed_payout_after_the_readback(setup):
+    biz, make = setup
+    bill = biz.add_bill("Proveedor", "hilo", 120, biz.today().isoformat(), "none", "nobody@unclaimed.example")
+    biz.pay_bill_with_paypal(bill["id"])
+    biz.check_payouts()
+    agent, _ = make([tool("request_cancel_payout", {"bill_id": bill["id"]}), text("Puedo cancelarlo."), text("ok")])
+    res = agent.chat(biz.ws, "conv-cp", "cancela el pago al proveedor", "es")
+    assert "nobody@unclaimed.example" in res["reply"] and res["reply"].endswith("Di «sí» o toca Autorizar.")
+    agent.chat(biz.ws, "conv-cp", "sí", "es")
+    assert biz.bill_view(bill["id"])["status"] == "pending"
+
+
+def test_a_readback_that_cannot_be_built_never_arms_a_spoken_yes(setup, monkeypatch):
+    biz, make = setup
+    inv = biz.draft_invoice("Sarah Miller", "sarah@example.com", DRAFT["items"], "")
+    biz.send_invoice(inv["id"])
+    from app import i18n
+    monkeypatch.setitem(i18n.T, "rb_record_payment", {"es": "{missing}", "en": "{missing}"})
+    agent, _ = make([tool("request_record_payment", {"invoice_id": inv["id"], "amount": 10, "method": "CASH"}), text("Listo."), text("ok")])
+    agent.chat(biz.ws, "conv-rp2", "Sarah me pagó 10", "es")
+    agent.chat(biz.ws, "conv-rp2", "sí", "es")
+    assert biz.overview()["income"] == 0  # nothing was read back, so nothing a "yes" could approve

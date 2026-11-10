@@ -251,7 +251,9 @@
       rec = null;
       if (recCancelled) { recCancelled = false; finalText = ""; if (state === "listening") { input.value = ""; setState("idle"); } return; }
       const text = (finalText || input.value).trim();
-      if (text) { send(text, alternatives); return; }
+      if (modalListening) input.value = "";
+      if (text) { deliver(text, alternatives); return; }
+      if (modalListening) { modalListening = false; $("modalMic").classList.remove("listening"); $("modalVoiceHint").textContent = t("v_nospeech"); }
       setState("idle");
       if (recError && ["network", "service-not-allowed", "language-not-supported"].includes(recError) && serverSTT()) {
         preferRecording = true; add("bot", t("v_network")); recError = null; return;
@@ -310,7 +312,7 @@
       const r = await fetch("/api/transcribe", withTimeout({ method: "POST", body: fd }, 45000));
       const data = r.ok ? await r.json() : null;
       setState("idle");
-      if (data && data.text) send(data.text); else add("bot", t("v_nospeech"));
+      if (data && data.text) deliver(data.text); else { if (modalListening) { modalListening = false; $("modalMic").classList.remove("listening"); } add("bot", t("v_nospeech")); }
     } catch (e) { setState("idle"); add("bot", t("offline")); }
   }
   function stopListening() {
@@ -332,6 +334,12 @@
     add("me", text);
     const wait = add("bot pending", t("st_thinking"));
     wait.setAttribute("aria-hidden", "true");
+    const started = Date.now(); let step = 0;
+    const steps = u("thinkingSteps");
+    const ticker = setInterval(() => {
+      const secs = Math.round((Date.now() - started) / 1000);
+      if (secs >= 2) { step = Math.min(Math.floor(secs / 3), steps.length - 1); wait.textContent = `${steps[step]}… ${secs} s`; }
+    }, 1000);
     setState("thinking");
     let data;
     try {
@@ -339,11 +347,16 @@
     } catch (e) {
       data = { reply: t(e.status === 429 ? "rate" : e.status ? "server" : "offline"), error: "http" };
     }
+    clearInterval(ticker);
     wait.remove();
     epoch++;
     for (const a of data.actions || []) addAction(a);
     let newAuth = null;
-    for (const x of data.ui || []) { if (x.qr_png_base64) showQR(x); if (x.confirmation) newAuth = x.confirmation.confirmation_id; }
+    for (const x of data.ui || []) {
+      if (x.qr_png_base64) showQR(x);
+      if (x.confirmation) newAuth = x.confirmation.confirmation_id;
+      if (x.view) showView(x.view, x.filter);
+    }
     const reply = data.reply || t("server");
     add("bot", reply);
     if (data.error === "http" && !(data.actions || []).length) input.value = text;
@@ -359,13 +372,14 @@
   // ---------- authorization gate ----------
   let pending = [], modalConf = null, lastFocus = null;
   const KIND_TYPE = { send_invoice: "modalInvoiceType", cancel_invoice: "modalCancelType", pay_bill: "modalPayoutType",
-                      record_payment: "modalRecordType", cancel_payout: "modalCancelPayoutType" };
+                      record_payment: "modalRecordType", cancel_payout: "modalCancelPayoutType", mark_bill_paid: "modalMarkPaidType" };
   const KIND_TITLE = { send_invoice: "modalTitleInvoice", cancel_invoice: "modalTitleCancel", pay_bill: "modalTitlePayout",
-                       record_payment: "modalTitleRecord", cancel_payout: "modalTitleCancelPayout" };
+                       record_payment: "modalTitleRecord", cancel_payout: "modalTitleCancelPayout", mark_bill_paid: "modalTitleMarkPaid" };
   const amountOf = c => { const d = c.details || {}; return d.total != null ? d.total : d.amount; };
   const whoOf = c => { const d = c.details || {}; return d.customer || d.payee || ""; };
   const conceptOf = c => {
     const d = c.details || {};
+    if (d.method === "PAYPAL") return u("modalSeenInPayPal");
     if (d.method) return `${String((u("method") || {})[d.method] || d.method).replace(/\s*\(.*\)$/, "")} · ${u("modalOutsidePayPal")}`;
     if ((d.items || []).length) return d.items.map(it => `${it.quantity} × ${it.name} · ${money(it.unit_price, d.currency)}`).join(" · ");
     return d.description || "—";
@@ -435,6 +449,8 @@
   function openModal(c) {
     if (!c) return;
     closeMore();
+    $("modalVoiceHint").hidden = true;
+    $("modalMic").hidden = !!c.new_recipient || !canListen();
     modalConf = c;
     lastFocus = document.activeElement;
     fillModal(c);
@@ -443,9 +459,37 @@
     document.querySelector(".site").inert = true;
     $("closeModal").focus();
   }
-  let wantOpen = null;
+  let wantOpen = null, modalListening = false;
+  // what the microphone heard goes to the dialog while it listens for "yes"/"no", to the conversation otherwise
+  function deliver(text, alts) {
+    if (modalListening) { modalListening = false; $("modalMic").classList.remove("listening"); $("modalMic").setAttribute("aria-pressed", "false"); voiceDecide(text, alts || []); }
+    else send(text, alts);
+  }
+  async function voiceDecide(text, alts) {
+    const c = modalConf; if (!c) return;
+    const hint = $("modalVoiceHint"); hint.hidden = false; hint.textContent = `«${text}»`;
+    try {
+      const r = await post("/api/confirm/voice", { workspace_id: ws, conversation_id: conv, confirmation_id: c.id, fingerprint: c.fingerprint,
+                                                    text, alternatives: alts.slice(0, 3), lang }, 100000);
+      if (!r.understood) { hint.textContent = r.reply; speak(r.reply, null); return; }
+      epoch++; closeModal();
+      add(r.done ? "bot alert" : "bot", r.reply);
+      toast(r.approved ? (r.done ? u("toastAuthorized") : r.reply) : u("toastRejected"));
+      speak(r.reply, null);
+    } catch (e) { hint.textContent = t(e.status === 429 ? "rate" : "server"); }
+    refresh();
+  }
+  $("modalMic").addEventListener("click", () => {
+    unlockAudio();
+    if (modalListening) { modalListening = false; $("modalMic").classList.remove("listening"); stopListening(); return; }
+    stopSpeaking(); queue = [];
+    modalListening = true; $("modalMic").classList.add("listening"); $("modalMic").setAttribute("aria-pressed", "true");
+    $("modalVoiceHint").hidden = false; $("modalVoiceHint").textContent = u("modalListeningHint");
+    startListening();
+  });
   function closeModal() {
     if ($("approvalBackdrop").hidden) return;
+    if (modalListening) { modalListening = false; cancelListening(); }
     $("approvalBackdrop").hidden = true; document.body.classList.remove("modal-open"); modalConf = null;
     document.querySelector(".site").inert = false;
     if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
@@ -594,24 +638,55 @@
   }
 
   function renderDue(s) {
-    const today = s.overview.today || "";
-    const items = [];
-    for (const b of s.bills) if (b.status === "pending") items.push({ who: b.payee, amount: b.amount, date: b.due_date, kind: b.due_date < today ? "overdue" : "pay" });
-    for (const i of s.invoices) if (OPEN.has(i.status)) items.push({ who: i.customer, amount: i.due, date: i.due_date, kind: i.overdue ? "overdue" : "collect" });
-    items.sort((a, b) => (a.kind === "overdue" ? 0 : 1) - (b.kind === "overdue" ? 0 : 1) || String(a.date).localeCompare(String(b.date)));
+    const items = s.inbox || [];
     const list = $("dueList"); list.textContent = "";
     $("dueCount").textContent = String(items.length).padStart(2, "0");
     if (!items.length) { list.appendChild(el("div", "due-empty", u("dueEmpty"))); return; }
-    const SHOWN = 4;
+    const SHOWN = 5;
     for (const it of items.slice(0, SHOWN)) {
       const row = el("div", "due-item");
-      const dot = el("span", "due-bullet " + (it.kind === "overdue" ? "red" : it.kind === "pay" ? "orange" : "blue"));
-      const mid = el("div"); mid.append(el("b", "", it.who), el("small", "", u(it.kind === "overdue" ? "dueOverdue" : it.kind === "pay" ? "duePay" : "dueCollect", { date: fmtShort(it.date) })));
-      row.append(dot, mid, el("strong", "", money(it.amount)));
+      const tone = { bill_overdue: "red", invoice_overdue: "red", unclaimed: "violet", payout_check: "orange", bill_due: "orange", invoice_due: "blue" }[it.type] || "blue";
+      const dot = el("span", "due-bullet " + tone);
+      const mid = el("div"); mid.append(el("b", "", it.who), el("small", "", u("inbox_" + it.type, { date: fmtShort(it.date) })));
+      const right = el("div", "due-right"); right.append(el("strong", "", money(it.amount, it.currency)));
+      const act = it.action || {};
+      const btn = el("button", "due-act"); btn.type = "button";
+      if (act.kind === "pay_bill") { btn.textContent = u("inboxPay"); btn.addEventListener("click", () => propose("pay_bill", act.target, btn)); }
+      else if (act.kind === "cancel_payout") { btn.textContent = u("cancelPayout"); btn.classList.add("warn"); btn.addEventListener("click", () => propose("cancel_payout", act.target, btn)); }
+      else if (act.kind === "mark_bill_paid") { btn.textContent = u("inboxSeenPaid"); btn.addEventListener("click", () => propose("mark_bill_paid", act.target, btn)); }
+      else if (act.remind) { btn.textContent = u("inboxRemind"); btn.addEventListener("click", () => remindInvoice(act.remind, it.who, btn)); }
+      else if (act.ask === "email") { btn.textContent = u("inboxAddEmail"); btn.addEventListener("click", () => { toAssistant(); input.value = u("askEmail", { name: act.who }); setTimeout(() => input.focus(), 50); }); }
+      if (btn.textContent) right.append(btn);
+      row.append(dot, mid, right);
       list.appendChild(row);
     }
     if (items.length > SHOWN) list.appendChild(el("div", "due-more", u("dueMore", { n: items.length - SHOWN })));
   }
+  // PayPal's own reminder email, sent because the owner clicked (PayPal allows 2 per invoice per day)
+  async function remindInvoice(invoiceId, who, btn) {
+    if (btn) btn.disabled = true;
+    try { await post("/api/remind", { workspace_id: ws, invoice_id: invoiceId }); toast(u("remindSent", { name: who })); return true; }
+    catch (e) { toast(e.status === 429 ? t("rate") : u("remindFailed")); return false; }
+    finally { if (btn) btn.disabled = false; refresh(); }
+  }
+
+  // guided tour: three steps a judge can complete in two minutes, checked from the real state
+  const TOUR_KEY = "dp_tour_closed";
+  function renderTour(s) {
+    const box = $("tour");
+    if (!s.business.sample || store.get(TOUR_KEY) === "1") { box.hidden = true; return; }
+    const auth = s.authorizations || [];
+    const done = {
+      bill: auth.some(a => a.kind === "send_invoice" && a.status === "done"),
+      pay: auth.some(a => a.kind === "pay_bill" && a.status === "done"),
+      paid: (s.invoices || []).some(i => i.status === "PAID" || i.status === "MARKED_AS_PAID"),
+    };
+    box.hidden = false;
+    $$("#tour li").forEach(li => li.classList.toggle("done", !!done[li.dataset.step]));
+    box.classList.toggle("complete", done.bill && done.pay && done.paid);
+  }
+  $("tourClose").addEventListener("click", () => { store.set(TOUR_KEY, "1"); $("tour").hidden = true; });
+  $$(".tour-try").forEach(b => b.addEventListener("click", () => { toAssistant(); cancelListening(); send(u(b.dataset.cmd)); }));
 
   function renderLedger(moves) {
     const body = $("ledgerBody"); body.textContent = "";
@@ -714,9 +789,32 @@
     } catch (e) { toast(e.status === 429 ? t("rate") : u("proposalFailed")); }
     finally { if (btn) btn.disabled = false; }
   }
+  // the assistant asked to show a view (and filter its table): "show me what's overdue"
+  const VIEW_GRID = { invoices: "invoices", payouts: "bills", contacts: "contacts", security: "auth" };
+  function showView(view, filter) {
+    if (!TABS.includes(view)) return;
+    if (phone.matches) { setTab(view); } else goView(view);
+    const g = VIEW_GRID[view];
+    if (!g) return;
+    const box = document.querySelector(`.grid-tools[data-grid="${g}"] input`);
+    if (box) { box.value = filter || ""; if (grids[g]) { grids[g].setGridOption("quickFilterText", box.value); updateTotals(g); } }
+  }
   function statusLabel(p) { const r = p.data || {}; return t("status")[r.overdue ? "overdue" : r.unclaimed ? "unclaimed" : r.held ? "held" : r.status] || r.status || ""; }
   // totals of the rows left after a search, pinned under each money table
   const TOTALS = { invoices: { label: "customer", sum: ["total", "due"] }, bills: { label: "payee", sum: ["amount"] } };
+  function updateBulk() {
+    const g = grids.invoices, btn = $("bulkRemind"); if (!g) return;
+    const n = g.getSelectedRows().length;
+    btn.hidden = !n; btn.querySelector("span").textContent = u("bulkRemind", { n });
+  }
+  $("bulkRemind").addEventListener("click", async () => {
+    const g = grids.invoices; if (!g) return;
+    const rows = g.getSelectedRows(); const btn = $("bulkRemind"); btn.disabled = true;
+    let ok = 0;
+    for (const r of rows) { if (await remindInvoice(r.id, r.customer, null)) ok++; }
+    g.deselectAll(); btn.disabled = false; updateBulk();
+    toast(u("bulkDone", { ok, n: rows.length }));
+  });
   function updateTotals(name) {
     const g = grids[name]; if (!g) return;
     let n = 0; const row = {};
@@ -780,7 +878,10 @@
     if (!grids[name]) {
       grids[name] = agGrid.createGrid(holder, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name), rowHeight: name === "bills" ? 56 : 46,
         defaultColDef: { sortable: true, filter: false, resizable: true, suppressHeaderMenuButton: true }, animateRows: true, localeText: { noRowsToShow: t("no_rows"), loadingOoo: "…" },
-        getRowClass: p => (p.node.rowPinned ? "row-total" : ""), onFilterChanged: () => updateTotals(name), onRowDataUpdated: () => updateTotals(name) });
+        getRowClass: p => (p.node.rowPinned ? "row-total" : ""), onFilterChanged: () => updateTotals(name), onRowDataUpdated: () => updateTotals(name),
+        ...(name === "invoices" ? { rowSelection: { mode: "multiRow", checkboxes: true, headerCheckbox: true, enableClickSelection: false,
+                                                     isRowSelectable: node => !!node.data && OPEN.has(node.data.status) },
+                                    onSelectionChanged: () => updateBulk() } : {}) });
       grids[name].__lang = lang; grids[name].__json = JSON.stringify(rows);
     } else {
       const json = JSON.stringify(rows);
@@ -815,11 +916,13 @@
     wasSeeding = seeding;
     renderDue(s); renderLedger(s.movements || []); renderRec(s); renderCounts(s); renderAging(s.overview.receivable_aging);
     if (window.agGrid) { setGrid("invoices", s.invoices); setGrid("bills", s.bills); setGrid("contacts", s.contacts); setGrid("auth", s.authorizations || []); }
+    const wh = s.webhook_last || {};  // this business's own last PayPal notification, signature verified
+    $("whLast").textContent = wh.at ? `${u("whLast")}: ${wh.event} · ${new Date(wh.at * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · ✓` : u("whNone");
     renderList("reminders", s.reminders, t("empty_reminders"), r => li(fmtWhen(r.due_at), r.text, r.kind === "remind_customer" ? "mail" : "bell"));
     renderList("activity", s.activity, t("empty_activity"), a => li(new Date(a.at * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }), a.text, "clock"));
     renderList("memory", s.facts, t("empty_memory"), f => li("", f, "spark"));
     pending = s.confirmations || [];
-    renderAuthCards(); renderSecurityCard(); renderAuthBanner();
+    renderAuthCards(); renderSecurityCard(); renderAuthBanner(); renderTour(s);
     if (wantOpen) { const c = pending.find(x => x.id === wantOpen); if (c) { wantOpen = null; if (!modalConf) openModal(c); } }
     if (modalConf) {
       const still = pending.find(c => c.id === modalConf.id && c.fingerprint === modalConf.fingerprint);
@@ -893,7 +996,7 @@
   const toAssistant = () => { if (phone.matches) setMView("assistant"); };
   $("askPriority").addEventListener("click", () => { toAssistant(); send(u("cmdPriority")); });
   $("workspacePayout").addEventListener("click", () => { toAssistant(); input.value = PAY_PREFIX[lang] || ""; setTimeout(() => input.focus(), 350); });
-  $("dueAction").addEventListener("click", () => { if (pending[0]) openModal(pending[0]); else { toAssistant(); send(u("cmdPriority")); } });
+  $("dueAction").addEventListener("click", () => { toAssistant(); cancelListening(); send(u("cmdPriority")); });
   $("safetyReview").addEventListener("click", () => { if (pending[0]) openModal(pending[0]); else { toAssistant(); setTimeout(() => input.focus(), 350); } });
   $("moreNewBiz").addEventListener("click", () => { closeMore(); $("new-biz").click(); });
 
