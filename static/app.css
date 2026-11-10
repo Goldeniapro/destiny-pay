@@ -161,6 +161,7 @@ body{background:var(--bg)}
 .workspace-grid{grid-template-columns:minmax(0,1.3fr) minmax(0,.7fr)}
 .grid{height:calc(100vh - 240px);height:calc(100dvh - 240px);min-height:360px}
 .list{max-height:none}
+.grid.fit{height:auto;min-height:0}
 
 /* security view */
 .security-lead{color:#5f728a;font-size:14px;line-height:1.7;margin:0 0 16px;max-width:720px}

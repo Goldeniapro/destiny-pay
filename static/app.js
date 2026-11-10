@@ -710,6 +710,9 @@
       const json = JSON.stringify(rows);
       if (grids[name].__json !== json) { grids[name].setGridOption("rowData", rows); grids[name].__json = json; }
     }
+    // a short table fits its rows; a long one scrolls inside the view
+    const fit = rows.length <= 14;
+    if (grids[name].__fit !== fit) { grids[name].setGridOption("domLayout", fit ? "autoHeight" : "normal"); holder.classList.toggle("fit", fit); grids[name].__fit = fit; }
   }
   function renderList(id, items, empty, fmt) {
     const ul = $(id); ul.textContent = "";
