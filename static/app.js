@@ -689,7 +689,7 @@
       { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: 150, cellRenderer: twoLines },
       { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 112, flex: 0.9 },
       { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 96, flex: 0.8, sort: "asc", hide: narrow() },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 130, flex: 0.9 },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 196, flex: 1.1 },
       { headerName: t("col_actions"), cellRenderer: billActions, width: 164, sortable: false },
     ];
     return [
