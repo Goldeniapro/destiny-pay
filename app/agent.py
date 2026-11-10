@@ -7,6 +7,7 @@ time is only *requested* by the model and executed by code after the owner confi
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -22,6 +23,7 @@ from .business import Business, ValidationError
 from .i18n import LANGS, classify_reply, fmt_money, method_name, t
 from .paypal import PayPalError
 
+log = logging.getLogger("destiny.agent")
 MODEL = "claude-opus-5-5"
 EFFORT = os.environ.get("DP_EFFORT", "low")  # short spoken replies; raise to "medium" if quality drops
 MAX_TOKENS = int(os.environ.get("DP_MAX_TOKENS", "4000"))  # replies are a few spoken sentences
@@ -127,8 +129,13 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "financial_overview", "description": "Numbers for advice: income, expenses and net for the period, money owed to the business (and overdue), bills due in 7 and 30 days, projected cash for 30 days, top customers and expense categories.",
      "input_schema": _schema({"period": {"type": "string", "enum": ["today", "week", "month"]}})},
 ]
+# The API accepts at most 20 strict tools per request (a 400 otherwise). Every tool that touches money or the books
+# stays strict; these read-only or display-only ones are validated in run_tool instead.
+VIEWS = ("overview", "invoices", "payouts", "forecast", "reminders", "contacts", "memory", "activity", "security")
+NOT_STRICT = {"show_view", "list_reminders", "financial_overview"}
 for _tool in TOOLS:
-    _tool["strict"] = True
+    if _tool["name"] not in NOT_STRICT:
+        _tool["strict"] = True
 
 
 def run_tool(biz: Business, conversation_id: str, name: str, args: dict) -> tuple[Any, dict | None]:
@@ -167,7 +174,7 @@ def run_tool(biz: Business, conversation_id: str, name: str, args: dict) -> tupl
             raise PayPalError("PayPal did not return a QR image.")
         return {"ok": True, "qr": "shown on screen"}, {"qr_png_base64": image, "invoice_id": a.get("invoice_id", "")}
     if name == "show_view":
-        view = a.get("view", "overview")
+        view = a.get("view") if a.get("view") in VIEWS else "overview"  # not a strict tool: checked here
         return {"ok": True, "shown": view}, {"view": view, "filter": str(a.get("filter", ""))[:60]}
     if name == "add_bill":
         return biz.add_bill(a.get("payee", ""), a.get("description", ""), a.get("amount", 0), a.get("due_date", ""), a.get("recurrence", "none"),
@@ -186,7 +193,7 @@ def run_tool(biz: Business, conversation_id: str, name: str, args: dict) -> tupl
     if name == "remember":
         return biz.remember(a.get("fact", "")), None
     if name == "financial_overview":
-        return biz.overview(a.get("period", "month")), None
+        return biz.overview(a.get("period") if a.get("period") in ("today", "week", "month") else "month"), None
     raise ValidationError(f"Unknown tool {name}")
 
 
@@ -430,12 +437,14 @@ class DestinyPayAgent:
                     betas=["server-side-fallback-2026-07-01"],
                     fallbacks="default",
                 )
-            except anthropic.BadRequestError:
+            except anthropic.BadRequestError as e:
+                log.warning("Claude rejected the request: %s", str(e)[:400])
                 result = fail("api_error")  # the stored history may be unusable: start it fresh (memory is in the database)
                 messages.clear()
                 conv.awaiting = ""
                 return result
-            except anthropic.AnthropicError:
+            except anthropic.AnthropicError as e:
+                log.warning("Claude call failed: %s %s", e.__class__.__name__, str(e)[:300])
                 return fail("api_error")
             conv.spent += self.budget.add(getattr(response, "usage", None))
 

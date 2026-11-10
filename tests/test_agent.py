@@ -64,11 +64,13 @@ def last_invoice(biz):
 
 
 def test_tools_are_strict_and_complete():
+    from app.agent import NOT_STRICT
     names = {t["name"] for t in TOOLS}
     assert {"draft_invoice", "request_send_invoice", "request_pay_bill", "add_bill", "create_reminder", "remember", "financial_overview"} <= names
     for t in TOOLS:
         schema = t["input_schema"]
-        assert t["strict"] and schema["additionalProperties"] is False and set(schema["required"]) == set(schema["properties"])
+        assert schema["additionalProperties"] is False and set(schema["required"]) == set(schema["properties"])
+        assert t.get("strict") or t["name"] in NOT_STRICT
 
 
 def test_full_charge_flow_with_spoken_yes(setup):
@@ -386,3 +388,21 @@ def test_a_readback_that_cannot_be_built_never_arms_a_spoken_yes(setup, monkeypa
     agent.chat(biz.ws, "conv-rp2", "Sarah me pagó 10", "es")
     agent.chat(biz.ws, "conv-rp2", "sí", "es")
     assert biz.overview()["income"] == 0  # nothing was read back, so nothing a "yes" could approve
+
+
+def test_tool_list_fits_the_api_limit_and_money_tools_stay_strict():
+    """The API rejects more than 20 strict tools in one request: the live assistant failed at 22 (gate 2)."""
+    from app.agent import TOOLS, run_tool  # noqa: F401
+    strict = [t["name"] for t in TOOLS if t.get("strict")]
+    assert len(strict) <= 20
+    for t in TOOLS:
+        if t["name"].startswith("request_") or t["name"] in ("draft_invoice", "add_bill", "record_movement", "remind_invoice", "save_contact"):
+            assert t.get("strict"), t["name"]
+        assert t["input_schema"]["additionalProperties"] is False
+
+
+def test_non_strict_tools_validate_their_own_input(setup):
+    biz, _ = setup
+    from app.agent import run_tool
+    assert run_tool(biz, "c", "show_view", {"view": "<script>", "filter": "x" * 500})[1] == {"view": "overview", "filter": "x" * 60}
+    assert run_tool(biz, "c", "financial_overview", {"period": "decade"})[0] == biz.overview("month")
