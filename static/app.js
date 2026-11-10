@@ -541,6 +541,7 @@
     $$(".ws-panel").forEach(p => { p.hidden = p.dataset.panel !== tab; });
     const cap = tab[0].toUpperCase() + tab.slice(1);
     $("workspaceTitle").textContent = u("tabTitle" + cap); $("wsKicker").textContent = u("tabKicker" + cap);
+    $("wsSub").textContent = u("tabSub" + cap);  // one plain sentence: what this screen is for
     $("workspacePayout").hidden = !["overview", "payouts"].includes(tab);
     syncNav();
   }
@@ -775,7 +776,7 @@
   const gridTheme = () => agGrid.themeQuartz.withParams({
     fontFamily: "Inter, system-ui, sans-serif", fontSize: 14.5, backgroundColor: "#ffffff", foregroundColor: "#0a2448",
     headerBackgroundColor: "#f6f9fd", headerTextColor: "#5a6b82", headerFontSize: 13, headerFontWeight: 750,
-    borderColor: "#e4ebf3", rowBorder: { color: "#eef2f7" }, wrapperBorderRadius: 14, accentColor: "#0070e0", rowHoverColor: "#f2f8ff", cellHorizontalPadding: 12,
+    borderColor: "#e4ebf3", rowBorder: { color: "#eef2f7" }, wrapperBorderRadius: 14, accentColor: "#0b7f6c", rowHoverColor: "#f2f7f8", cellHorizontalPadding: 12,
   });
   function pill(text, cls) { return el("span", "pill " + (cls || ""), text); }
   function decisionPill(p) {
@@ -971,7 +972,8 @@
     const wh = s.webhook_last || {};  // this business's own last PayPal notification, signature verified
     $("whLast").textContent = wh.at ? `${u("whLast")}: ${wh.event} · ${new Date(wh.at * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · ✓` : u("whNone");
     renderList("reminders", s.reminders, t("empty_reminders"), r => li(fmtWhen(r.due_at), r.text, r.kind === "remind_customer" ? "mail" : "bell"));
-    renderList("activity", s.activity, t("empty_activity"), a => li(new Date(a.at * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }), a.text, "clock"));
+    renderList("activity", s.activity, t("empty_activity"), a => li(new Date(a.at * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }),
+      String(a.text).replace(/\b\d{4}-\d{2}-\d{2}\b/g, d => fmtShort(d)), "clock"));  // dates read like the rest of the app
     renderList("memory", s.facts, t("empty_memory"), f => li("", f, "spark"));
     pending = s.confirmations || [];
     renderAuthCards(); renderSecurityCard(); renderAuthBanner(); renderTour(s);
