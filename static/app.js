@@ -42,18 +42,8 @@
     if (p && typeof s === "string") s = s.replace(/\{(\w+)\}/g, (_, x) => (p[x] !== undefined ? p[x] : ""));
     return s;
   };
-  const money = (v, cur) => `${Number(v || 0).toLocaleString(lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur || currency}`;
-  const fmtShort = iso => { if (!iso) return ""; const d = new Date(iso.length <= 10 ? iso + "T12:00:00" : iso); return d.toLocaleDateString(lang, { day: "numeric", month: "short" }); };
-  const fmtWhen = iso => new Date(iso).toLocaleString(lang, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-
-  // big amounts as in the design: "$545" with ".00 USD" in smaller type
-  function bigMoney(target, v, cur, showCur) {
-    cur = cur || currency;
-    target.textContent = "";
-    let parts;
-    try { parts = new Intl.NumberFormat(lang, { style: "currency", currency: cur, currencyDisplay: "narrowSymbol" }).formatToParts(Number(v || 0)); }
-    catch (e) { target.textContent = money(v, cur); return; }
-    // symbol always in front, grouping and decimal separator from the language ("$1.234,50" in es/pt, "$1,234.50" in en)
+  function moneyParts(v, cur) {
+    const parts = new Intl.NumberFormat(lang, { style: "currency", currency: cur, currencyDisplay: "narrowSymbol" }).formatToParts(Number(v || 0));
     let sign = "", sym = "", whole = "", frac = "";
     for (const p of parts) {
       if (p.type === "minusSign") sign = "−";
@@ -61,6 +51,24 @@
       else if (p.type === "integer" || p.type === "group") whole += p.value;
       else if (p.type === "decimal" || p.type === "fraction") frac += p.value;
     }
+    return { sign, sym, whole, frac };
+  }
+  // "$1,234.50" in en, "$1.234,50" in es/pt; the code is added when the symbol alone is ambiguous
+  const money = (v, cur) => {
+    cur = cur || currency;
+    try { const p = moneyParts(v, cur); return p.sign + p.sym + p.whole + p.frac + ((p.sym === "$" && cur !== "USD") || p.sym === cur ? " " + cur : ""); }
+    catch (e) { return `${Number(v || 0).toFixed(2)} ${cur}`; }
+  };
+  const fmtShort = iso => { if (!iso) return ""; const d = new Date(iso.length <= 10 ? iso + "T12:00:00" : iso); return d.toLocaleDateString(lang, { day: "numeric", month: "short" }); };
+  const fmtWhen = iso => new Date(iso).toLocaleString(lang, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+  // big amounts as in the design: "$545" with ".00 USD" in smaller type
+  function bigMoney(target, v, cur, showCur) {
+    cur = cur || currency;
+    target.textContent = "";
+    let p;
+    try { p = moneyParts(v, cur); } catch (e) { target.textContent = money(v, cur); return; }
+    const { sign, sym, whole, frac } = p;
     const s = document.createElement("span"); s.textContent = frac;
     target.append(sign + sym + whole, s);
     if (showCur) { const c = document.createElement("small"); c.textContent = " " + cur; target.append(c); }
@@ -92,13 +100,15 @@
   function toast(msg) { const x = $("toast"); clearTimeout(toastTimer); x.textContent = msg; x.classList.add("show"); toastTimer = setTimeout(() => x.classList.remove("show"), 4800); }
 
   // ---------- texts ----------
-  const TODAY_AT = { es: "HOY EN ", en: "TODAY AT ", pt: "HOJE EM " };
   const PAY_PREFIX = { es: "Págale a ", en: "Pay ", pt: "Pague a " };
   function applyTexts() {
     document.documentElement.lang = lang;
     $("lang").value = lang;
     $$("[data-i18n]").forEach(e => { e.textContent = u(e.dataset.i18n); });
     $$("[data-i18n-html]").forEach(e => { e.innerHTML = u(e.dataset.i18nHtml); });  // fixed UI strings from i18n.js only, never data
+    $$("[data-i18n-aria]").forEach(e => { e.setAttribute("aria-label", u(e.dataset.i18nAria)); });
+    $("moreClose").setAttribute("aria-label", t("close"));
+    $$(".sidenav .workspace-tab, .sidenav .foot-link").forEach(b => { const n = b.querySelector("[data-i18n]") || b.querySelector("span:not(.nav-count)"); if (n) b.title = n.textContent; });
     input.placeholder = t("placeholder"); $("t-label").textContent = t("message"); sendBtn.setAttribute("aria-label", t("send"));
     for (const [id, label] of [["new-conv", u("newConv")], ["readSummary", t("play_brief")], ["closeModal", u("modalClose")]]) { $(id).title = label; $(id).setAttribute("aria-label", label); }
     $("lang-label").textContent = t("lang");
@@ -136,16 +146,23 @@
     if (s === "idle" && queue.length && !busy) setTimeout(flushQueue, 250);
   }
 
+  const chatEnd = () => { const b = $("studioBody"); b.scrollTop = b.scrollHeight; };
+  function placeChips() {
+    const empty = log.hidden && !pending.length;
+    const home = empty ? $("starter") : $("chipsDock");
+    if ($("chips").parentElement !== home) home.appendChild($("chips"));
+    $("starter").hidden = !empty;
+  }
   function add(cls, text) {
     const d = el("div", "msg " + cls, text);
-    log.hidden = false; log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
+    log.hidden = false; placeChips(); log.appendChild(d); chatEnd(); return d;
   }
   function addAction(a) {
     const label = t("actions")[a.tool] || a.tool;
     const waiting = a.result && a.result.status === "awaiting_owner_confirmation";
     const d = el("div", "act" + (a.error ? " err" : waiting ? " wait" : ""));
     d.append(icon(a.error ? "close" : waiting ? "lock" : "check"), a.error ? `${label}: ${a.error}` : (waiting ? u("pendingAuth") : label));
-    log.hidden = false; log.appendChild(d); log.scrollTop = log.scrollHeight;
+    log.hidden = false; placeChips(); log.appendChild(d); chatEnd();
   }
 
   // ---------- voice output: Destiny's own voice, browser voice as fallback ----------
@@ -349,8 +366,10 @@
     return d.description || "—";
   };
 
+  let shownCards = 0;
   function renderAuthCards() {
     const box = $("cards"); box.textContent = "";
+    const count = $("countAuth"); count.hidden = !pending.length; count.textContent = String(pending.length);
     for (const c of pending) {
       const card = el("div", "auth-card");
       const ic = el("span", "ac-icon"); ic.appendChild(icon("lock"));
@@ -364,6 +383,9 @@
       card.append(ic, txt, amt, actions);
       box.appendChild(card);
     }
+    placeChips();
+    if (pending.length > shownCards) chatEnd();
+    shownCards = pending.length;
   }
 
   function renderSecurityCard() {
@@ -392,6 +414,7 @@
     $("modalEmailValue").textContent = d.email || "—";
     $("modalConceptValue").textContent = conceptOf(c);
     $("modalReadback").textContent = c.readback || "";
+    $("confirmApproval").querySelector("span").textContent = `${u("modalConfirm")} ${money(amountOf(c), d.currency)}`;
     $("modalExpires").textContent = c.expires_at ? u("modalExpires", { t: new Date(c.expires_at * 1000).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) }) : "";
   }
   function openModal(c) {
@@ -444,8 +467,9 @@
   });
 
   // ---------- dashboard ----------
-  const TABS = ["overview", "invoices", "payouts", "forecast", "reminders", "contacts", "activity", "memory"];
+  const TABS = ["overview", "invoices", "payouts", "forecast", "reminders", "contacts", "memory", "activity", "security"];
   let tab = TABS.includes(store.get("dp_tab")) ? store.get("dp_tab") : "overview";
+  const app = $("app"), phone = window.matchMedia("(max-width: 1023px)");
   function setTab(name, quiet) {
     if (!TABS.includes(name)) return;
     tab = name; if (!quiet) store.set("dp_tab", tab);
@@ -453,9 +477,28 @@
     $$(".ws-panel").forEach(p => { p.hidden = p.dataset.panel !== tab; });
     const cap = tab[0].toUpperCase() + tab.slice(1);
     $("workspaceTitle").textContent = u("tabTitle" + cap); $("wsKicker").textContent = u("tabKicker" + cap);
+    syncNav();
   }
+  function syncNav() {
+    const view = app.dataset.mview === "assistant" ? "assistant" : tab;
+    const primary = ["overview", "invoices", "payouts", "assistant"];
+    $$(".bn-btn").forEach(b => b.classList.toggle("active", b.dataset.view === view || (b.dataset.view === "more" && !primary.includes(view))));
+    $$(".more-item[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === view));
+  }
+  function setMView(v) { app.dataset.mview = v; syncNav(); }
+  function goView(name) {
+    closeMore();
+    if (name === "assistant") { setMView("assistant"); return; }
+    setTab(name); setMView("dash"); $("main").scrollTop = 0; if (phone.matches) window.scrollTo(0, 0);
+  }
+  function openMore() { $("moreSheet").hidden = false; $("moreBtn").setAttribute("aria-expanded", "true"); $$("#moreSheet .more-item")[0].focus(); }
+  function closeMore() { if ($("moreSheet").hidden) return; $("moreSheet").hidden = true; $("moreBtn").setAttribute("aria-expanded", "false"); }
+  $$(".bn-btn").forEach(b => b.addEventListener("click", () => { if (b.dataset.view === "more") openMore(); else goView(b.dataset.view); }));
+  $$(".more-item[data-view]").forEach(b => b.addEventListener("click", () => goView(b.dataset.view)));
+  $("moreClose").addEventListener("click", closeMore);
+  $("moreSheet").addEventListener("click", e => { if (e.target === $("moreSheet")) closeMore(); });
   $$(".workspace-tab").forEach(b => {
-    b.addEventListener("click", () => setTab(b.dataset.tab));
+    b.addEventListener("click", () => { setTab(b.dataset.tab); setMView("dash"); });
     b.addEventListener("keydown", e => {
       if (!["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft"].includes(e.key)) return;
       e.preventDefault();
@@ -540,13 +583,15 @@
     const list = $("dueList"); list.textContent = "";
     $("dueCount").textContent = String(items.length).padStart(2, "0");
     if (!items.length) { list.appendChild(el("div", "due-empty", u("dueEmpty"))); return; }
-    for (const it of items.slice(0, 4)) {
+    const SHOWN = 4;
+    for (const it of items.slice(0, SHOWN)) {
       const row = el("div", "due-item");
       const dot = el("span", "due-bullet " + (it.kind === "overdue" ? "red" : it.kind === "pay" ? "orange" : "blue"));
       const mid = el("div"); mid.append(el("b", "", it.who), el("small", "", u(it.kind === "overdue" ? "dueOverdue" : it.kind === "pay" ? "duePay" : "dueCollect", { date: fmtShort(it.date) })));
       row.append(dot, mid, el("strong", "", money(it.amount)));
       list.appendChild(row);
     }
+    if (items.length > SHOWN) list.appendChild(el("div", "due-more", u("dueMore", { n: items.length - SHOWN })));
   }
 
   function renderLedger(moves) {
@@ -564,20 +609,19 @@
     }
   }
 
-  function renderAside(s) {
+  function renderRec(s) {
     const o = s.overview;
-    $("asideToday").textContent = (TODAY_AT[lang] || "") + s.business.name.toUpperCase();
-    $("asideDate").textContent = new Date().toLocaleDateString(lang, { day: "numeric", month: "short", year: "numeric" }).toUpperCase();
-    bigMoney($("asideRecv"), o.receivable); $("asideRecvSub").textContent = u("asideReceivableN", { n: t("open_n")(o.open_invoices) });
     const ob = (o.bills_overdue || [])[0];
-    bigMoney($("asideOverdue"), ob ? ob.amount : 0); $("asideOverdueSub").textContent = ob ? u("asideOverdueBill", { payee: ob.payee }) : u("asideNoOverdue");
-    bigMoney($("asideProj"), o.projected_30_days);
-    bigMoney($("heroReceivable"), o.receivable);
     // a deterministic, data-grounded first step (the assistant gives the full advice on request)
     const oi = (o.overdue_invoices || [])[0], nb = (o.next_bills || []).find(b => b.due_date >= (o.today || ""));
     $("recText").textContent = ob ? u("recOverdueBill", { payee: ob.payee, amount: money(ob.amount) })
       : oi ? u("recOverdueInvoice", { name: oi.customer, amount: money(oi.due), date: fmtShort(oi.due_date) })
       : nb ? u("recNext", { payee: nb.payee, amount: money(nb.amount), date: fmtShort(nb.due_date) }) : u("recClear");
+  }
+  function renderCounts(s) {
+    const set = (id, n) => { const x = $(id); x.hidden = !n; x.textContent = String(n); };
+    set("countInvoices", s.invoices.filter(i => OPEN.has(i.status)).length);
+    set("countPayouts", s.bills.filter(x => x.status === "pending").length);
   }
 
   function renderAging(ag) {
@@ -685,7 +729,7 @@
     $("bizName").textContent = s.business.name;
     $("bizSub").textContent = s.business.sample ? u("workspaceSub") : u("workspaceSub").split("·")[0].trim();
     renderMetrics(s.overview); renderAreaChart(s.cashflow, s.overview.projected_30_days); renderBarsChart(s.cashflow);
-    renderDue(s); renderLedger(s.movements || []); renderAside(s); renderAging(s.overview.receivable_aging);
+    renderDue(s); renderLedger(s.movements || []); renderRec(s); renderCounts(s); renderAging(s.overview.receivable_aging);
     if (window.agGrid) { setGrid("invoices", s.invoices); setGrid("bills", s.bills); setGrid("contacts", s.contacts); }
     renderList("reminders", s.reminders, t("empty_reminders"), r => li(fmtWhen(r.due_at), r.text, r.kind === "remind_customer" ? "mail" : "bell"));
     renderList("activity", s.activity, t("empty_activity"), a => li(new Date(a.at * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }), a.text, "clock"));
@@ -741,7 +785,7 @@
   }
   function newConversation(keepLog) {
     conv = uuid(); store.set("dp_conv", conv, true);
-    if (!keepLog) { log.textContent = ""; log.hidden = true; }
+    if (!keepLog) { log.textContent = ""; log.hidden = true; placeChips(); }
   }
   async function briefing() {
     try { const b = await api(`/api/briefing?lang=${lang}`); briefingData = b; $("briefing").textContent = b.text; }
@@ -762,14 +806,12 @@
     if (busy || !confirm(t("new_biz_q"))) return;
     cancelListening(); queue = []; stopSpeaking(); closeModal(); newConversation(false); await createWorkspace(); briefing();
   });
-  const toAssistant = () => $("experiencia").scrollIntoView({ behavior: "smooth", block: "start" });
+  const toAssistant = () => { if (phone.matches) setMView("assistant"); };
   $("askPriority").addEventListener("click", () => { toAssistant(); send(u("cmdPriority")); });
   $("workspacePayout").addEventListener("click", () => { toAssistant(); input.value = PAY_PREFIX[lang] || ""; setTimeout(() => input.focus(), 350); });
   $("dueAction").addEventListener("click", () => { if (pending[0]) openModal(pending[0]); else { toAssistant(); send(u("cmdPriority")); } });
   $("safetyReview").addEventListener("click", () => { if (pending[0]) openModal(pending[0]); else { toAssistant(); setTimeout(() => input.focus(), 350); } });
-  $$("[data-goto]").forEach(b => b.addEventListener("click", () => { setTab(b.dataset.goto); $("producto").scrollIntoView({ behavior: "smooth", block: "start" }); }));
-  $("mobileNavToggle").addEventListener("click", () => { const open = document.querySelector(".nav-links").classList.toggle("open"); $("mobileNavToggle").setAttribute("aria-expanded", String(open)); });
-  $$(".nav-links a").forEach(a => a.addEventListener("click", () => { document.querySelector(".nav-links").classList.remove("open"); $("mobileNavToggle").setAttribute("aria-expanded", "false"); }));
+  $("moreNewBiz").addEventListener("click", () => { closeMore(); $("new-biz").click(); });
 
   document.addEventListener("keydown", e => {
     if (!$("approvalBackdrop").hidden) {
@@ -782,8 +824,9 @@
       }
       return;
     }
+    if (e.key === "Escape" && !$("moreSheet").hidden) { closeMore(); $("moreBtn").focus(); return; }
     if (e.key === "Escape") { cancelListening(); queue = []; stopSpeaking(); }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); toAssistant(); input.focus(); }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); toAssistant(); setTimeout(() => input.focus(), 0); }
   });
 
   setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 5000);
