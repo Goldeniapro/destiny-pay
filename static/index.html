@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -50,50 +50,41 @@
 <section class="intro" id="intro" hidden role="dialog" aria-modal="true" aria-labelledby="introTitle">
  <div class="intro-hero"><div class="intro-wrap">
   <div class="intro-bar"><span class="intro-brand"><span class="intro-mark"><svg class="ico logo-ico"><use href="#i-logo"/></svg></span><b>destiny<span>pay</span></b></span>
-   <span class="intro-langs" role="group" aria-label="Idioma / Language"><button type="button" data-lang="es">ES</button><button type="button" data-lang="en">EN</button><button type="button" data-lang="pt">PT</button></span></div>
+   <span class="intro-langs" role="group" aria-label="Language / Idioma"><button type="button" data-lang="en">EN</button><button type="button" data-lang="es">ES</button><button type="button" data-lang="pt">PT</button></span></div>
   <div class="intro-hero-grid">
-   <div><span class="intro-eyebrow" data-i18n="introTag"></span><h1 id="introTitle" data-i18n="introTitle"></h1><p class="intro-lead" data-i18n="introLead"></p>
-    <div class="intro-actions"><button type="button" class="intro-cta" id="introEnter"><span data-i18n="introEnter"></span><svg class="ico"><use href="#i-arrow"/></svg></button><a class="intro-link" href="#introProblem" data-i18n="introHow"></a></div>
-    <p class="intro-note" data-i18n="introNote"></p></div>
+   <div class="intro-copy"><span class="intro-eyebrow" data-i18n="introTag"></span><h1 id="introTitle"><span data-i18n="introTitle"></span> <span class="h1-accent" data-i18n="introTitle2"></span></h1><p class="intro-lead" data-i18n="introLead"></p>
+    <div class="intro-actions"><button type="button" class="intro-cta" id="introEnter"><span data-i18n="introEnter"></span><svg class="ico"><use href="#i-arrow"/></svg></button><a class="intro-link" href="#introHowTo" data-i18n="introHow"></a></div>
+    <ul class="intro-chips"><li><svg class="ico"><use href="#i-receipt"/></svg><span data-i18n="introChip1"></span></li><li><svg class="ico"><use href="#i-shield"/></svg><span data-i18n="introChip2"></span></li><li><svg class="ico"><use href="#i-mic"/></svg><span data-i18n="introChip3"></span></li></ul></div>
    <div class="intro-chat" aria-hidden="true">
-    <div class="ic-msg me" data-i18n="introChat1"></div>
-    <div class="ic-card"><small data-i18n="introChat2Tag"></small><b>$90.00 · Sarah Miller</b><span data-i18n="introChat2"></span><em data-i18n="introChat2Btn"></em></div>
+    <div class="ic-head"><span class="ic-live"></span><span data-i18n="introChatHead"></span></div>
+    <div class="ic-msg me"><span class="ic-wave"><i></i><i></i><i></i><i></i><i></i></span><span data-i18n="introChat1"></span></div>
+    <div class="ic-card"><small data-i18n="introChat2Tag"></small><b>$90.00 · Sarah Miller</b><span data-i18n="introChat2"></span><code>SHA-256 · 9f3a…c41e</code><em data-i18n="introChat2Btn"></em></div>
     <div class="ic-msg ok" data-i18n="introChat3"></div>
-    <div class="ic-msg bot" data-i18n="introChat4"></div>
+    <div class="ic-msg bot"><svg class="ico"><use href="#i-bell"/></svg><span data-i18n="introChat4"></span></div>
    </div>
   </div>
+  <div class="intro-stack"><span data-i18n="introStack"></span><ul><li>PayPal Invoicing v2</li><li>PayPal Payouts</li><li data-i18n="introStackHooks"></li><li>Claude</li><li data-i18n="introStackVoice"></li></ul></div>
  </div></div>
- <div class="intro-wrap intro-body">
-  <h2 id="introProblem" data-i18n="introProblemTitle"></h2>
-  <div class="intro-grid3">
-   <article><b data-i18n="introP1"></b><p data-i18n="introP1Sub"></p></article>
-   <article><b data-i18n="introP2"></b><p data-i18n="introP2Sub"></p></article>
-   <article><b data-i18n="introP3"></b><p data-i18n="introP3Sub"></p></article>
+ <div class="intro-wrap intro-body" id="introHowTo">
+  <p class="intro-why"><b data-i18n="introWhyBig"></b> <span data-i18n="introWhy"></span></p>
+  <div class="intro-two">
+   <div><h2 data-i18n="introDiffTitle"></h2>
+    <div class="intro-table" role="table">
+     <div class="it-row it-head" role="row"><span role="columnheader"></span><span role="columnheader" data-i18n="introColPaypal"></span><span role="columnheader" data-i18n="introColDestiny"></span></div>
+     <div class="it-row" role="row"><b role="rowheader" data-i18n="introD1"></b><span role="cell" data-i18n="introD1a"></span><span role="cell" data-i18n="introD1b"></span></div>
+     <div class="it-row" role="row"><b role="rowheader" data-i18n="introD2"></b><span role="cell" data-i18n="introD2a"></span><span role="cell" data-i18n="introD2b"></span></div>
+     <div class="it-row" role="row"><b role="rowheader" data-i18n="introD6"></b><span role="cell" data-i18n="introD6a"></span><span role="cell" data-i18n="introD6b"></span></div>
+     <div class="it-row" role="row"><b role="rowheader" data-i18n="introD3"></b><span role="cell" data-i18n="introD3a"></span><span role="cell" data-i18n="introD3b"></span></div>
+     <div class="it-row" role="row"><b role="rowheader" data-i18n="introD4"></b><span role="cell" data-i18n="introD4a"></span><span role="cell" data-i18n="introD4b"></span></div>
+    </div></div>
+   <div><h2 data-i18n="introSafeTitle"></h2>
+    <ol class="intro-steps">
+     <li><span>1</span><div><b data-i18n="introS1"></b><p data-i18n="introS1Sub"></p></div></li>
+     <li><span>2</span><div><b data-i18n="introS2"></b><p data-i18n="introS2Sub"></p></div></li>
+     <li><span>3</span><div><b data-i18n="introS3"></b><p data-i18n="introS3Sub"></p></div></li>
+     <li><span>4</span><div><b data-i18n="introS4"></b><p data-i18n="introS4Sub"></p></div></li>
+    </ol></div>
   </div>
-  <h2 data-i18n="introWhatTitle"></h2>
-  <div class="intro-grid4">
-   <article><svg class="ico"><use href="#i-receipt"/></svg><b data-i18n="introW1"></b><p data-i18n="introW1Sub"></p></article>
-   <article><svg class="ico"><use href="#i-send"/></svg><b data-i18n="introW2"></b><p data-i18n="introW2Sub"></p></article>
-   <article><svg class="ico"><use href="#i-bell"/></svg><b data-i18n="introW3"></b><p data-i18n="introW3Sub"></p></article>
-   <article><svg class="ico"><use href="#i-chart"/></svg><b data-i18n="introW4"></b><p data-i18n="introW4Sub"></p></article>
-  </div>
-  <h2 data-i18n="introDiffTitle"></h2>
-  <div class="intro-table" role="table">
-   <div class="it-row it-head" role="row"><span role="columnheader"></span><span role="columnheader" data-i18n="introColPaypal"></span><span role="columnheader" data-i18n="introColDestiny"></span></div>
-   <div class="it-row" role="row"><b role="rowheader" data-i18n="introD1"></b><span role="cell" data-i18n="introD1a"></span><span role="cell" data-i18n="introD1b"></span></div>
-   <div class="it-row" role="row"><b role="rowheader" data-i18n="introD2"></b><span role="cell" data-i18n="introD2a"></span><span role="cell" data-i18n="introD2b"></span></div>
-   <div class="it-row" role="row"><b role="rowheader" data-i18n="introD3"></b><span role="cell" data-i18n="introD3a"></span><span role="cell" data-i18n="introD3b"></span></div>
-   <div class="it-row" role="row"><b role="rowheader" data-i18n="introD4"></b><span role="cell" data-i18n="introD4a"></span><span role="cell" data-i18n="introD4b"></span></div>
-   <div class="it-row" role="row"><b role="rowheader" data-i18n="introD5"></b><span role="cell" data-i18n="introD5a"></span><span role="cell" data-i18n="introD5b"></span></div>
-  </div>
-  <p class="intro-honest" data-i18n="introHonest"></p>
-  <h2 data-i18n="introSafeTitle"></h2>
-  <ol class="intro-steps">
-   <li><span>1</span><b data-i18n="introS1"></b><p data-i18n="introS1Sub"></p></li>
-   <li><span>2</span><b data-i18n="introS2"></b><p data-i18n="introS2Sub"></p></li>
-   <li><span>3</span><b data-i18n="introS3"></b><p data-i18n="introS3Sub"></p></li>
-   <li><span>4</span><b data-i18n="introS4"></b><p data-i18n="introS4Sub"></p></li>
-  </ol>
   <div class="intro-end"><div><h2 data-i18n="introDemoTitle"></h2><p data-i18n="introDemoSub"></p></div><button type="button" class="intro-cta" id="introEnter2"><span data-i18n="introEnter"></span><svg class="ico"><use href="#i-arrow"/></svg></button></div>
   <p class="intro-legal" data-i18n="footLegal"></p>
  </div>
@@ -109,7 +100,7 @@
   <div class="topbar-tools">
     <span class="sandbox-pill" id="modePill"><span class="sandbox-dot"></span> PayPal <b>Sandbox</b></span>
     <label class="lang-label" for="lang"><svg class="ico"><use href="#i-globe"/></svg><span class="sr-only" id="lang-label">Idioma</span></label>
-    <select id="lang" aria-label="Idioma / Language / Idioma"><option value="es">ES</option><option value="en">EN</option><option value="pt">PT</option></select>
+    <select id="lang" aria-label="Idioma / Language / Idioma"><option value="en">EN</option><option value="es">ES</option><option value="pt">PT</option></select>
     <button type="button" class="tool-btn header-tool" id="mute" aria-pressed="false"><svg class="ico on"><use href="#i-volume"/></svg><svg class="ico off"><use href="#i-mute"/></svg></button>
   </div>
 </header>

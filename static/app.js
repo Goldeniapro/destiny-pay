@@ -24,11 +24,8 @@
   function initialLang() {
     const saved = store.get("dp_lang");
     if (saved && I18N[saved]) return saved;
-    for (const l of navigator.languages || [navigator.language || "en"]) {
-      const p = String(l).slice(0, 2).toLowerCase();
-      if (I18N[p]) return p;
-    }
-    return "en";
+    const q = new URLSearchParams(location.search).get("lang");  // ?lang=es for a shared link
+    return q && I18N[q] ? q : "en";  // English first for everyone; ES / PT are one tap away
   }
 
   let lang = initialLang();
@@ -1167,7 +1164,7 @@
   function showIntro(show) {
     const box = $("intro"); box.hidden = !show; document.body.classList.toggle("intro-open", show);
     $("app").inert = show;
-    if (show) { box.scrollTop = 0; setTimeout(() => $("introEnter").focus(), 30); }
+    if (show) { box.scrollTop = 0; setTimeout(() => $("introEnter").focus({ preventScroll: true, focusVisible: false }), 30); }
     else { store.set("dp_intro_seen", "1"); if (!phone.matches) setTimeout(() => input.focus(), 30); }
   }
   $("introEnter").addEventListener("click", () => showIntro(false));
