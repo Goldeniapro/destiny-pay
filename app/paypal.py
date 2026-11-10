@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -71,13 +72,14 @@ class PayPalClient:
             self._token_expiry = time.time() + int(body.get("expires_in", 3000))
         return {"Authorization": f"Bearer {self._token}"}
 
-    def _request(self, method: str, path: str, **kw) -> dict | str:
+    def _request(self, method: str, path: str, request_id: str = "", **kw) -> dict | str:
         headers = {"Content-Type": "application/json"}
         if method != "GET":
             headers["Prefer"] = "return=representation"
             # Same id on every retry: if PayPal already processed a request that timed out,
-            # the retry does not create a second invoice or record a payment twice.
-            headers["PayPal-Request-Id"] = str(uuid.uuid4())
+            # the retry does not create a second invoice or record a payment twice. A caller with a stable
+            # identity for the operation (a payout's sender_batch_id) passes it, so a later resend is also deduplicated.
+            headers["PayPal-Request-Id"] = request_id or str(uuid.uuid4())
         refreshed = force_token = uncertain = False
         for attempt in range(3):
             try:
@@ -204,15 +206,19 @@ class PayPalClient:
                 "sender_item_id": sender_batch_id[:63],
             }],
         }
-        return self._request("POST", "/v1/payments/payouts", json=body)
+        return self._request("POST", "/v1/payments/payouts", request_id=f"payout-{sender_batch_id}"[:100], json=body)
 
     def get_payout(self, payout_batch_id: str) -> dict:
         return self._request("GET", f"/v1/payments/payouts/{payout_batch_id}")
 
     # --- webhooks ------------------------------------------------------------
-    def verify_webhook(self, headers: dict, event: dict, webhook_id: str) -> bool:
-        """Ask PayPal whether a webhook delivery is genuine (headers are case-insensitive)."""
+    def verify_webhook(self, headers: dict, event: dict | str, webhook_id: str) -> bool:
+        """Ask PayPal whether a webhook delivery is genuine (headers are case-insensitive).
+
+        PayPal checks its signature against the event exactly as it was delivered, so the raw body is passed through
+        untouched (re-serializing a parsed dict can change it)."""
         h = {k.lower(): v for k, v in headers.items()}
+        raw = event if isinstance(event, str) else json.dumps(event)
         body = {
             "auth_algo": h.get("paypal-auth-algo", ""),
             "cert_url": h.get("paypal-cert-url", ""),
@@ -220,11 +226,11 @@ class PayPalClient:
             "transmission_sig": h.get("paypal-transmission-sig", ""),
             "transmission_time": h.get("paypal-transmission-time", ""),
             "webhook_id": webhook_id,
-            "webhook_event": event,
         }
-        if not all(body[k] for k in ("auth_algo", "cert_url", "transmission_id", "transmission_sig", "transmission_time", "webhook_id")):
+        if not all(body.values()):
             return False
-        out = self._request("POST", "/v1/notifications/verify-webhook-signature", json=body)
+        payload = json.dumps(body)[:-1] + ', "webhook_event": ' + raw + "}"
+        out = self._request("POST", "/v1/notifications/verify-webhook-signature", content=payload.encode("utf-8"))
         return isinstance(out, dict) and out.get("verification_status") == "SUCCESS"
 
 

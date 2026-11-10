@@ -44,7 +44,9 @@ def test_workspace_state_and_briefing(api):
     client, _ = api
     ws = new_ws(client, "en")
     st = client.get("/api/state", params={"lang": "en"}, headers={"x-workspace": ws}).json()
-    assert st["business"]["name"] == "Inti Crafts" and len(st["bills"]) == 4 and len(st["contacts"]) == 5 and st["overview"]["receivable"] == 545 and st["overview"]["projected_30_days"] == 45
+    assert st["business"]["name"] == "Inti Crafts" and len(st["bills"]) == 4 and len(st["contacts"]) == 5 and st["overview"]["receivable"] == 545
+    o = st["overview"]
+    assert o["cash_on_hand"] > 0 and o["projected_30_days"] == round(o["cash_on_hand"] + o["receivable"] - o["bills_next_30_days"], 2)
     assert len(st["cashflow"]) == 30 and st["overview"]["bills_next_7_days"] > 0
     b = client.get("/api/briefing", params={"lang": "en"}, headers={"x-workspace": ws}).json()
     assert "Textiles Andinos" in b["text"] and "overdue bill: Empaques Lima" in b["text"] and b["speech_id"] is None  # no voice key: the browser speaks
@@ -264,3 +266,10 @@ def test_refused_approval_gives_back_the_payout_allowance(api, monkeypatch):
     req2 = biz.request_confirmation("pay_bill", str(bill["id"]))
     ok = client.post("/api/confirm", json={**body, "confirmation_id": req2["confirmation_id"], "fingerprint": req2["fingerprint"]})
     assert ok.status_code == 200 and ok.json()["done"] is True  # the failed attempt did not use up the allowance
+
+
+def test_privacy_page_and_head_request(api):
+    client, _ = api
+    r = client.get("/privacy")
+    assert r.status_code == 200 and "Anthropic" in r.text and "Fish Audio" in r.text and "Sandbox" in r.text
+    assert client.head("/").status_code == 200

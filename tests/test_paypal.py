@@ -163,3 +163,28 @@ def test_payout_body_and_webhook_verification():
     assert pp.verify_webhook(headers, {"id": "WH-1"}, "WEBHOOK1") is True
     assert seen["/v1/notifications/verify-webhook-signature"]["webhook_id"] == "WEBHOOK1"
     assert pp.verify_webhook({}, {"id": "WH-1"}, "WEBHOOK1") is False  # missing headers: rejected without asking PayPal
+
+
+def test_webhook_is_verified_with_the_raw_body_and_payouts_reuse_their_request_id():
+    """Payments jury: PayPal checks the signature against the event exactly as delivered; a payout resend is deduplicated."""
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/v1/oauth2/token":
+            return httpx.Response(200, json={"access_token": "T", "expires_in": 3600})
+        seen.setdefault(req.url.path, []).append((req.headers.get("PayPal-Request-Id"), req.content.decode()))
+        if req.url.path == "/v1/payments/payouts":
+            return httpx.Response(201, json={"batch_header": {"payout_batch_id": "B1", "batch_status": "PENDING"}})
+        return httpx.Response(200, json={"verification_status": "SUCCESS"})
+
+    pp = make_paypal(handler)
+    raw = '{"id":"WH-1",  "summary":"Pago recibido – ñ","resource":{"amount":"10.50"}}'  # odd spacing and non-ASCII kept as sent
+    headers = {"PAYPAL-AUTH-ALGO": "SHA256withRSA", "PAYPAL-CERT-URL": "https://api.paypal.com/cert", "PAYPAL-TRANSMISSION-ID": "t1",
+               "PAYPAL-TRANSMISSION-SIG": "sig", "PAYPAL-TRANSMISSION-TIME": "2026-11-08T00:00:00Z"}
+    assert pp.verify_webhook(headers, raw, "WEBHOOK1") is True
+    sent = seen["/v1/notifications/verify-webhook-signature"][0][1]
+    assert sent.endswith('"webhook_event": ' + raw + "}") and json.loads(sent)["webhook_id"] == "WEBHOOK1"
+    pp.create_payout("dpabc", "supplier@example.com", 180)
+    pp.create_payout("dpabc", "supplier@example.com", 180)
+    ids = [rid for rid, _ in seen["/v1/payments/payouts"]]
+    assert ids == ["payout-dpabc", "payout-dpabc"]

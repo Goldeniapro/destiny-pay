@@ -44,7 +44,7 @@ def seed_demo(biz: Business, lang: str) -> None:
     biz.save_contact("Marta Quispe", "marta.quispe@example.com", "supplier", tx["marta"])
     biz.add_bill("Textiles Andinos SAC", tx["yarn"], 180, (today + timedelta(days=2)).isoformat(), "none", "pagos@textilesandinos.example.com")
     biz.add_bill("Marta Quispe", tx["rent"], 250, (today + timedelta(days=5)).isoformat(), "monthly", "marta.quispe@example.com")
-    biz.add_bill("Movistar", tx["power"], 45, (today + timedelta(days=9)).isoformat(), "monthly", "")
+    biz.add_bill("Red Andina Internet", tx["power"], 45, (today + timedelta(days=9)).isoformat(), "monthly", "")
     biz.add_bill("Empaques Lima", tx["bags"], 25, (today - timedelta(days=1)).isoformat(), "none", "")
     now = time.time()
     sales = [(1, 0, 95, "PAYPAL", "Sarah Miller"), (2, 1, 35, "YAPE", "Lucho Ramos"), (3, 2, 120, "PAYPAL", ""), (5, 3, 48, "CASH", ""),

@@ -8,6 +8,7 @@ import pytest
 from app import agent as agent_mod
 from app.agent import TOOLS, DestinyPayAgent, TokenBudget
 from app.i18n import T
+from app.business import ValidationError
 
 DRAFT = {"customer_name": "Sarah Miller", "customer_email": "sarah arroba example punto com",
          "items": [{"name": "Chompa", "quantity": 2, "unit_price": 45}], "note": "", "due_in_days": 7}
@@ -49,6 +50,13 @@ def setup(make_biz):
         return DestinyPayAgent(lambda ws: businesses[ws], client=client, **kw), client
 
     return biz, make
+
+
+def trust(biz, email):
+    """A supplier email this business has already paid once through PayPal (a spoken yes may pay it again)."""
+    old = biz.add_bill("Earlier payee", "earlier order", 10, biz.today().isoformat(), "none", email)
+    biz.store.x("INSERT INTO payouts(sender_batch_id, ws, bill_id, status, batch_id, amount, checked_at, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                ("trusted-" + email, biz.ws, old["id"], "done", "B-old", 10, 0, 0))
 
 
 def last_invoice(biz):
@@ -227,6 +235,7 @@ def test_every_tool_runs(setup):
 def test_cancel_reply_never_pays(setup):
     biz, make = setup
     bill = biz.add_bill("Marta Quispe", "Alquiler", 300, biz.today().isoformat(), "monthly", "marta@example.com")
+    trust(biz, "marta@example.com")
     agent, client = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("¿Confirmas el pago de 300?"), text("Entendido.")])
     agent.chat(biz.ws, "conv-c1", "Págale el alquiler a Marta", "en")
     res = agent.chat(biz.ws, "conv-c1", "cancel the payment please", "en")
@@ -281,6 +290,7 @@ def test_code_always_reads_back_what_a_yes_will_approve(setup):
     """Security audit M3: the reply always ends with the code's own readback, whatever the model said."""
     biz, make = setup
     bill = biz.add_bill("Marta Quispe", "Alquiler", 1900, biz.today().isoformat(), "monthly", "marta@example.com")
+    trust(biz, "marta@example.com")
     agent, _ = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("Tienes 1.900 de alquiler. ¿Te pongo un recordatorio?")])
     res = agent.chat(biz.ws, "conv-rb", "Págale a Marta", "es")
     assert res["reply"].endswith("Para confirmar: pagar 1.900,00 USD a Marta Quispe con PayPal, al correo marta@example.com. Di «sí» o toca Autorizar.")
@@ -305,3 +315,31 @@ def test_payee_written_down_in_the_same_turn_needs_the_button(setup):
     assert T["button_only"]["es"] in res["reply"]
     agent.chat(biz.ws, "conv-newpayee", "sí", "es")
     assert biz.paypal.payouts == {}
+
+
+def test_first_payment_to_an_email_is_never_approved_by_voice(setup):
+    """Security jury M1: an injected email change can't be paid on a spoken yes; only the on-screen dialog can approve it."""
+    biz, make = setup
+    biz.add_bill("Textiles Andinos SAC", "Hilo", 1999, biz.today().isoformat(), "none", "pagos@textiles.example.com")
+    biz.save_contact("Textiles Andinos SAC", "evil@attacker.example", "supplier")  # what an obeyed injection could do
+    bill = biz.add_bill("Textiles Andinos SAC", "Hilo extra", 1999, biz.today().isoformat(), "none", "evil@attacker.example")
+    biz.store.x("UPDATE bills SET created_at=0 WHERE id=?", (bill["id"],))  # written down in an earlier turn
+    agent, _ = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("¿Quieres que te lea el resumen del día?"), text("Listo.")])
+    res = agent.chat(biz.ws, "conv-m1", "hola", "es")
+    assert "primer pago a este correo" in res["reply"]
+    agent.chat(biz.ws, "conv-m1", "sí", "es")
+    assert biz.bill_view(bill["id"])["status"] == "pending" and biz.paypal.payouts == {}
+    assert biz.pending_confirmations()[0]["new_recipient"] is True
+
+
+def test_paypal_is_never_a_manual_payment_method(setup):
+    """Security jury B1: PayPal money only moves through the authorization gate, never as a 'manual' record."""
+    biz, _ = setup
+    bill = biz.add_bill("Marta Quispe", "Alquiler", 300, biz.today().isoformat(), "monthly", "marta@example.com")
+    with pytest.raises(ValidationError, match="request_pay_bill"):
+        biz.mark_bill_paid(bill["id"], "PAYPAL")
+    inv = biz.draft_invoice("Sarah Miller", "sarah@example.com", [{"name": "Chompa", "quantity": 1, "unit_price": 45}], "", 7)
+    biz.send_invoice(inv["id"])
+    with pytest.raises(ValidationError, match="recorded by PayPal"):
+        biz.record_payment(inv["id"], 45, "PAYPAL")
+    assert biz.bill_view(bill["id"])["status"] == "pending"

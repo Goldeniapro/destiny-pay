@@ -25,6 +25,7 @@ T: dict[str, dict[str, str]] = {
     "rb_cancel_invoice": {"es": 'Para confirmar: cancelar la factura de {total} de {name} ({email}). Di «sí» o toca Autorizar.', "en": "To confirm: cancel {name}'s {total} invoice ({email}). Say “yes” or tap Authorize.", "pt": 'Para confirmar: cancelar a fatura de {total} de {name} ({email}). Diga «sim» ou toque em Autorizar.'},
     "rb_pay_bill": {"es": 'Para confirmar: pagar {total} a {name} con PayPal, al correo {email}. Di «sí» o toca Autorizar.', "en": 'To confirm: pay {name} {total} with PayPal at {email}. Say “yes” or tap Authorize.', "pt": 'Para confirmar: pagar {total} a {name} com PayPal, no e-mail {email}. Diga «sim» ou toque em Autorizar.'},
     "button_only": {"es": 'Como el destinatario se anotó recién, autoriza este pago con el botón de la pantalla.', "en": 'Because the payee was added just now, authorize this payment with the button on screen.', "pt": 'Como o destinatário acabou de ser cadastrado, autorize este pagamento com o botão da tela.'},
+    "button_only_new": {"es": 'Es el primer pago a este correo: revisa el correo y autorízalo con el botón de la pantalla.', "en": 'This is the first payment to this email: check the email and authorize it with the button on screen.', "pt": 'É o primeiro pagamento para este e-mail: confira o e-mail e autorize com o botão da tela.'},
     "multi_confirm": {"es": 'Preparé {n} operaciones. Por seguridad, confírmalas una por una con los botones de la pantalla.', "en": 'I prepared {n} operations. For safety, confirm them one by one with the buttons on screen.', "pt": 'Preparei {n} operações. Por segurança, confirme uma por uma com os botões da tela.'},
     "c_unverified": {"es": 'No lo ejecuté: no pude verificar la operación con PayPal. Inténtalo de nuevo en un momento.', "en": "I didn't run it: I couldn't verify the operation with PayPal. Please try again in a moment.", "pt": 'Não executei: não consegui verificar a operação com o PayPal. Tente de novo em instantes.'},
     "c_changed": {"es": 'No lo ejecuté: la operación cambió después de que la preparé. Pídemela de nuevo para revisarla otra vez.', "en": "I didn't run it: the operation changed after I prepared it. Ask me again so you can review it again.", "pt": 'Não executei: a operação mudou depois que eu a preparei. Peça de novo para revisá-la outra vez.'},
@@ -71,6 +72,7 @@ LOG = {
     "payment_recorded": {"es": '{name} pagó {amount} ({method})', "en": '{name} paid {amount} ({method})', "pt": '{name} pagou {amount} ({method})'},
     "bill_added": {"es": 'Cuenta por pagar: {payee} {amount} el {date}', "en": 'Bill to pay: {payee} {amount} on {date}', "pt": 'Conta a pagar: {payee} {amount} em {date}'},
     "bill_paid": {"es": 'Pagado a {payee}: {amount} ({method})', "en": 'Paid {payee} {amount} ({method})', "pt": 'Pago a {payee}: {amount} ({method})'},
+    "bill_sent_unclaimed": {"es": 'Enviado a {payee} con PayPal, aún sin reclamar: {amount}', "en": 'Sent {payee} {amount} with PayPal, not claimed yet', "pt": 'Enviado a {payee} com PayPal, ainda não resgatado: {amount}'},
     "bill_paid_paypal": {"es": 'Pagado a {payee} con PayPal: {amount}', "en": 'Paid {payee} {amount} with PayPal', "pt": 'Pago a {payee} com PayPal: {amount}'},
     "payout_sent": {"es": 'Pago de PayPal enviado a {payee}: {amount}', "en": 'PayPal payment sent to {payee}: {amount}', "pt": 'Pagamento PayPal enviado a {payee}: {amount}'},
     "payout_failed": {"es": 'El pago de PayPal a {payee} falló; la cuenta vuelve a estar pendiente', "en": 'PayPal payment to {payee} failed; the bill is pending again', "pt": 'O pagamento PayPal a {payee} falhou; a conta voltou a pendente'},
@@ -154,6 +156,9 @@ _ACTION_WORDS = {
 }
 
 
+_NO_PROBLEM = re.compile(r"\b(?:no problem|no hay problema|sin problema|ningún problema|ningun problema|sem problema|não tem problema|nao tem problema)\b")
+
+
 def _words(text: str) -> list[str]:
     return re.findall(r"[\w'’-]+", text.lower().replace("’", "'"))
 
@@ -163,6 +168,8 @@ def classify_reply(text: str, action: str = "") -> str:
     raw = text.strip().lower()
     if not raw or any(q in raw for q in "?¿？؟⸮") or any(ch.isdigit() for ch in raw):
         return "other"
+    # "no problem" is agreement, not a negation ("no problem, send it")
+    raw = _NO_PROBLEM.sub(" ", raw)
     words = _words(raw)
     if not words:
         return "other"

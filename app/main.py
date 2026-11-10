@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import os
 import secrets
@@ -243,14 +244,14 @@ class AmountQuota:
             self.used[key] += amount
 
 
-tokens_per_ip = AmountQuota(_env_int("DP_TOKENS_PER_IP_DAY", 300000))
+tokens_per_ip = AmountQuota(_env_int("DP_TOKENS_PER_IP_DAY", 600000))
 payouts_per_ip = AmountQuota(_env_int("DP_PAYOUT_PER_IP_DAY", 3000))
 
 quotas = {
-    "workspace_day": DailyQuota(_env_int("DP_WORKSPACES_PER_IP_DAY", 20)),
-    "chat_day": DailyQuota(_env_int("DP_CHATS_PER_IP_DAY", 150)),
+    "workspace_day": DailyQuota(_env_int("DP_WORKSPACES_PER_IP_DAY", 60)),
+    "chat_day": DailyQuota(_env_int("DP_CHATS_PER_IP_DAY", 300)),
     "transcribe_day": DailyQuota(_env_int("DP_TRANSCRIBES_PER_IP_DAY", 150)),
-    "money_day": DailyQuota(_env_int("DP_MONEY_ACTIONS_PER_IP_DAY", 20)),
+    "money_day": DailyQuota(_env_int("DP_MONEY_ACTIONS_PER_IP_DAY", 40)),
 }
 
 limits = {
@@ -332,9 +333,14 @@ def lang_of(lang: str) -> str:
 
 
 # --- pages and status -------------------------------------------------------------------------
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def index():
     return FileResponse(STATIC / "index.html")
+
+
+@app.get("/privacy")
+def privacy():
+    return FileResponse(STATIC / "privacy.html")
 
 
 @app.get("/healthz")
@@ -357,6 +363,9 @@ def status():
 
 
 # --- workspaces (a business with its own memory) ----------------------------------------------
+SEED_WAIT_SECONDS = 12
+
+
 class WorkspaceIn(BaseModel):
     lang: str = "es"
     tz: str = Field(default="America/Lima", max_length=64)
@@ -377,9 +386,17 @@ def create_workspace(body: WorkspaceIn, request: Request):
     store.create_workspace(ws, NAMES.get(lang, NAMES["en"]), lang, tz, paypal.currency, body.sample)
     if body.sample:
         seed_demo(business_factory(ws), lang)
-        if not DEMO_MODE:  # real sandbox invoices take a few seconds: don't make the visitor wait for them
-            threading.Thread(target=_seed_invoices, args=(ws, lang), daemon=True, name="seed").start()
+        if not DEMO_MODE:
+            # real sandbox invoices take a few seconds: wait for them briefly so the first screen is complete,
+            # and if PayPal is slow, let the page show that they are still being created
+            SEEDING.add(ws)
+            t = threading.Thread(target=_seed_invoices, args=(ws, lang), daemon=True, name="seed")
+            t.start()
+            t.join(timeout=SEED_WAIT_SECONDS)
     return {"workspace_id": ws}
+
+
+SEEDING: set[str] = set()  # sample businesses whose real sandbox invoices are still being created (one worker process)
 
 
 def _seed_invoices(ws: str, lang: str) -> None:
@@ -387,6 +404,8 @@ def _seed_invoices(ws: str, lang: str) -> None:
         seed_invoices(business_factory(ws), lang)
     except Exception:
         log.warning("sample invoices could not be created on PayPal", exc_info=True)
+    finally:
+        SEEDING.discard(ws)
 
 
 @app.get("/api/state")
@@ -403,11 +422,12 @@ def state(request: Request, ws: str = Header(alias="x-workspace", **WS_ID), lang
             continue
         alerts.append({"id": a["id"], "text": text, "key": a["key"], "speech_id": voice.register(text, lang)})
     return {
-        "business": {"name": biz.info["name"], "currency": biz.currency, "tz": biz.tz.key, "sample": bool(biz.info["demo"])},
+        "business": {"name": biz.info["name"], "currency": biz.currency, "tz": biz.tz.key, "sample": bool(biz.info["demo"]),
+                     "seeding": ws in SEEDING},
         "overview": biz.overview("month"),
         "cashflow": biz.cashflow(30),
         "invoices": biz.list_invoices("all")[:50],
-        "bills": [b for b in biz.list_bills("all") if b["status"] == "pending"] + [b for b in biz.list_bills("paid")][-10:],
+        "bills": [b for b in biz.list_bills("all") if b["status"] in ("pending", "processing")] + [b for b in biz.list_bills("paid")][-10:],
         "reminders": biz.list_reminders(),
         "contacts": biz.find_contacts("", limit=100),
         "activity": [render_activity(a, lang) for a in store.q("SELECT id, at, kind, text, data FROM activity WHERE ws=? ORDER BY id DESC LIMIT 40", (ws,))],
@@ -590,19 +610,20 @@ async def paypal_webhook(request: Request):
     limit(request, "webhook", "webhook_all")  # per sender first, so one forger can't starve PayPal's real deliveries
     if not str(request.headers.get("paypal-cert-url", "")).startswith(CERT_HOSTS) or not _fresh(request.headers.get("paypal-transmission-time", "")):
         raise HTTPException(400, "Signature verification failed")  # cheap checks before calling PayPal
+    raw = (await request.body()).decode("utf-8", "replace")
     try:
-        event = await request.json()
-    except Exception:
+        event = json.loads(raw)
+    except ValueError:
         raise HTTPException(400, "Invalid JSON")
     if not isinstance(event, dict):
         raise HTTPException(400, "Invalid JSON")
     # PayPal calls are blocking: run them in the thread pool so the rest of the app keeps answering.
-    return await run_in_threadpool(_handle_webhook, dict(request.headers), event)
+    return await run_in_threadpool(_handle_webhook, dict(request.headers), event, raw)
 
 
-def _handle_webhook(headers: dict, event: dict) -> dict:
+def _handle_webhook(headers: dict, event: dict, raw: str = "") -> dict:
     try:
-        genuine = paypal.verify_webhook(headers, event, WEBHOOK_ID)
+        genuine = paypal.verify_webhook(headers, raw or event, WEBHOOK_ID)
     except PayPalError:
         genuine = False
     if not genuine:

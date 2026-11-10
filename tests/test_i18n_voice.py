@@ -20,6 +20,7 @@ def test_every_text_exists_in_every_language():
     ("cancel the payment please", "no"), ("cancel it", "no"), ("cancélala", "no"), 
     ("who is it for", "other"), ("is it sent", "other"), ("yes what is the total", "other"), ("do I owe it", "other"),
     ("ok send it to the other one", "other"), ("sí envíala al otro correo", "other"), ("¿sí?", "other"),
+    ("no problem, send it", "yes"), ("sin problema, envíala", "yes"), ("no problem but don't send it", "no"), ("no, no problem", "no"),
 ])
 
 def test_yes_no_classifier(reply, verdict):

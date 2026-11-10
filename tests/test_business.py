@@ -309,7 +309,7 @@ def test_payment_announced_once_even_with_concurrent_refreshes(biz):
 
 
 def test_pay_bill_needs_email(biz):
-    bill = biz.add_bill("Movistar", "Internet", 45, biz.today().isoformat())
+    bill = biz.add_bill("Red Andina Internet", "Internet", 45, biz.today().isoformat())
     with pytest.raises(ValidationError, match="PayPal email"):
         biz.request_confirmation("pay_bill", str(bill["id"]))
 
@@ -342,7 +342,8 @@ def test_overview_cashflow_and_briefing(biz):
     biz.add_bill("Marta", "Alquiler", 300, (biz.today() + timedelta(days=3)).isoformat())
     biz.record_movement("expense", "Taxi", 10, "CASH", "transport", "")
     o = biz.overview()
-    assert o["receivable"] == 90 and o["bills_next_7_days"] == 300 and o["projected_30_days"] == -210
+    assert o["receivable"] == 90 and o["bills_next_7_days"] == 300
+    assert o["cash_on_hand"] == -10 and o["projected_30_days"] == -220  # starts from the cash recorded, not from zero
     assert o["top_expense_categories"][0]["category"] == "transport"
     flow = biz.cashflow(30)
     assert len(flow) == 30 and sum(d["out"] for d in flow) == 300 and sum(d["in"] for d in flow) == 90

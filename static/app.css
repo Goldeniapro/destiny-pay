@@ -288,3 +288,37 @@ body{background:var(--bg)}
   .metric-value{font-size:21px}
   .metric-tile{padding:13px 12px 12px}
 }
+
+/* ---- jury round: legibility, totals, pending authorizations ---- */
+.auth-banner{display:flex;align-items:center;gap:14px;background:#fff8ec;border:1px solid #f3d9a8;border-radius:14px;padding:13px 16px;margin-bottom:12px}
+.auth-banner-icon{width:36px;height:36px;border-radius:11px;background:#b86e12;color:#fff;display:grid;place-items:center;flex:none}
+.auth-banner-icon .ico{width:17px;height:17px}
+.auth-banner-text{flex:1;min-width:0}.auth-banner-text b{display:block;font-size:14px;color:#5b3a0a}.auth-banner-text small{display:block;font-size:12.5px;color:#7a5418;margin-top:3px;overflow-wrap:anywhere}
+.auth-banner-btn{flex:none;display:inline-flex;align-items:center;gap:8px;border:0;background:var(--blue);color:#fff;font-weight:750;font-size:12.5px;padding:10px 14px;border-radius:10px}
+.auth-banner-btn:hover{background:#005bc0}.auth-banner-btn .ico{width:15px;height:15px}
+.grid-tools{display:flex;align-items:center;gap:10px;margin:0 0 10px}
+.grid-search{flex:1;max-width:340px;display:flex;align-items:center;gap:8px;border:1px solid #d5e1ef;border-radius:10px;background:#fff;padding:0 10px}
+.grid-search .ico{width:16px;height:16px;color:#5f7088}
+.grid-search input{border:0;outline:0;flex:1;min-width:0;font-size:13px;padding:9px 0;background:transparent;color:var(--ink)}
+.grid-count{font-size:12px;color:#5f7088;margin-right:auto}
+.grid-export{display:inline-flex;align-items:center;gap:7px;border:1px solid #d5e1ef;background:#fff;color:#0062c4;font-size:12px;font-weight:750;padding:8px 12px;border-radius:10px}
+.grid-export:hover{background:#eaf3ff}.grid-export .ico{width:15px;height:15px}
+.ag-row.row-total{font-weight:800;background:#f4f8fd}
+.chart-from{font-size:12px;color:#5f7088;margin:10px 0 0}
+.metric-busy{color:#0062c4!important}
+.modal-warning{display:flex;gap:8px;align-items:flex-start;margin:12px 0 0;padding:10px 12px;border-radius:10px;background:#fff8ec;border:1px solid #f3d9a8;color:#6b4510;font-size:12.5px;font-weight:650;line-height:1.45}
+.modal-warning .ico{width:15px;height:15px;flex:none;margin-top:1px}
+.foot-legal{font-size:11px;color:#5f7088;line-height:1.45;margin:6px 12px 0}
+.more-panel .foot-legal{margin:8px 10px 0}
+/* legibility: no grey text under ~4.5:1 on white and nothing under 11px */
+.mini-eyebrow,.ws-kicker,.nav-group,.chart-period,.ledger-table th,.ledger-caption,.tiny-date{color:#5f7088}
+.metric-top,.metric-tile>small,.due-item small,.chart-axis,.voice-fineprint,.sidebar-lower,.foot-link,.security-summary-row>span,.trust-step>p,.security-statement>p,.legal-note,.modal-details>div>span,.approval-check small,.modal-body>p:first-of-type{color:#5a6b82}
+.chart-axis{font-size:11px}.voice-fineprint{font-size:11.5px}.modal-legal{font-size:11px!important;color:#5a6b82!important}
+.modal-identity small,.modal-amount small,.modal-badge,.step-number{font-size:11px}
+.modal-details>div{font-size:12.5px}.approval-check b{font-size:12.5px}.approval-check small{font-size:11.5px}
+.table-status,.pill{font-size:11px}
+.sandbox-pill{color:#3f566f}
+/* the authorization dialog never starts above the screen on short or narrow viewports */
+.modal-backdrop{place-items:safe center}
+@media (max-height:900px),(max-width:600px){.modal-backdrop{place-items:start center}}
+@media (max-width:1023px){.auth-banner{flex-wrap:wrap}.auth-banner-btn{width:100%;justify-content:center}.grid-tools{flex-wrap:wrap}.grid-search{max-width:none;flex-basis:100%}}

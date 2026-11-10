@@ -107,6 +107,8 @@
     $$("[data-i18n]").forEach(e => { e.textContent = u(e.dataset.i18n); });
     $$("[data-i18n-html]").forEach(e => { e.innerHTML = u(e.dataset.i18nHtml); });  // fixed UI strings from i18n.js only, never data
     $$("[data-i18n-aria]").forEach(e => { e.setAttribute("aria-label", u(e.dataset.i18nAria)); });
+    $$("[data-i18n-ph]").forEach(e => { e.placeholder = u(e.dataset.i18nPh); });
+    document.title = u("docTitle");
     $("moreClose").setAttribute("aria-label", t("close"));
     $$(".sidenav .workspace-tab, .sidenav .foot-link").forEach(b => { const n = b.querySelector("[data-i18n]") || b.querySelector("span:not(.nav-count)"); if (n) b.title = n.textContent; });
     input.placeholder = t("placeholder"); $("t-label").textContent = t("message"); sendBtn.setAttribute("aria-label", t("send"));
@@ -161,7 +163,7 @@
     const label = t("actions")[a.tool] || a.tool;
     const waiting = a.result && a.result.status === "awaiting_owner_confirmation";
     const d = el("div", "act" + (a.error ? " err" : waiting ? " wait" : ""));
-    d.append(icon(a.error ? "close" : waiting ? "lock" : "check"), a.error ? `${label}: ${a.error}` : (waiting ? u("pendingAuth") : label));
+    d.append(icon(a.error ? "close" : waiting ? "lock" : "check"), a.error ? `${label}: ${u("actionNotDone")}` : (waiting ? u("pendingAuth") : label));
     log.hidden = false; placeChips(); log.appendChild(d); chatEnd();
   }
 
@@ -388,6 +390,15 @@
     shownCards = pending.length;
   }
 
+  function renderAuthBanner() {
+    const c = pending[0];
+    $("authBanner").hidden = !c;
+    if (!c) return;
+    $("authBannerTitle").textContent = pending.length > 1 ? u("authWaitingN", { n: pending.length }) : u("authWaiting");
+    $("authBannerSub").textContent = `${u(KIND_TYPE[c.kind])} · ${whoOf(c)} · ${money(amountOf(c), (c.details || {}).currency)}`;
+  }
+  $("authBannerBtn").addEventListener("click", () => openModal(pending[0]));
+
   function renderSecurityCard() {
     const c = pending[0];
     $("secCard").classList.toggle("is-example", !c);
@@ -415,10 +426,12 @@
     $("modalConceptValue").textContent = conceptOf(c);
     $("modalReadback").textContent = c.readback || "";
     $("confirmApproval").querySelector("span").textContent = `${u("modalConfirm")} ${money(amountOf(c), d.currency)}`;
+    $("modalNewRecipient").hidden = !c.new_recipient;
     $("modalExpires").textContent = c.expires_at ? u("modalExpires", { t: new Date(c.expires_at * 1000).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) }) : "";
   }
   function openModal(c) {
     if (!c) return;
+    closeMore();
     modalConf = c;
     lastFocus = document.activeElement;
     fillModal(c);
@@ -477,6 +490,7 @@
     $$(".ws-panel").forEach(p => { p.hidden = p.dataset.panel !== tab; });
     const cap = tab[0].toUpperCase() + tab.slice(1);
     $("workspaceTitle").textContent = u("tabTitle" + cap); $("wsKicker").textContent = u("tabKicker" + cap);
+    $("workspacePayout").hidden = !["overview", "payouts"].includes(tab);
     syncNav();
   }
   function syncNav() {
@@ -511,27 +525,29 @@
     const tile = el("div", "metric-tile");
     const top = el("div", "metric-top"); const ic = el("span", "metric-icon"); ic.appendChild(icon(iconName));
     top.append(el("span", "", label), ic);
-    const v = el("div", "metric-value"); bigMoney(v, value);
+    const v = el("div", "metric-value"); if (value === null) v.textContent = "…"; else bigMoney(v, value);
     tile.append(top, v, el("small", subCls || "", sub || " "));
     return tile;
   }
-  function renderMetrics(o) {
+  function renderMetrics(o, seeding) {
     const box = $("metrics"); box.textContent = "";
     const lateSum = (o.bills_overdue || []).reduce((n, b) => n + b.amount, 0);
     const top = o.top_expense_categories && o.top_expense_categories[0];
     const next = (o.next_bills || []).find(b => b.due_date >= (o.today || ""));
     box.append(
-      metric(t("kpi_receivable"), "receipt", o.receivable, o.overdue_invoices.length ? t("overdue_n")(o.overdue_invoices.length) : t("open_n")(o.open_invoices), o.overdue_invoices.length ? "metric-alert" : ""),
+      seeding ? metric(t("kpi_receivable"), "receipt", null, u("seeding"), "metric-busy")
+        : metric(t("kpi_receivable"), "receipt", o.receivable, o.overdue_invoices.length ? t("overdue_n")(o.overdue_invoices.length) : t("open_n")(o.open_invoices), o.overdue_invoices.length ? "metric-alert" : ""),
       metric(t("kpi_bills"), "wallet", o.bills_next_7_days - lateSum, o.bills_overdue.length ? t("overdue_bills")(o.bills_overdue.length, money(lateSum)) : (next ? t("next_bill")(next.payee, fmtShort(next.due_date)) : ""), o.bills_overdue.length ? "metric-alert" : ""),
       metric(t("kpi_income"), "arrowup", o.income, t("net")(money(o.net))),
       metric(t("kpi_expense"), "chart", o.expense, top ? u("metricExpensesTop", { cat: t("cat")[top.category] || top.category, amount: money(top.amount) }) : ""),
     );
   }
 
-  function renderAreaChart(days, projected) {
+  function renderAreaChart(days, projected, start) {
     bigMoney($("projValue"), projected);
+    $("projFrom").textContent = u("chartFrom", { amount: money(start || 0) });
     const svg = $("areaChart"), W = 680, H = 230, top = 22, bottom = 18;
-    let run = 0; const cum = days.map(d => (run += d.in - d.out));
+    let run = start || 0; const cum = days.map(d => (run += d.in - d.out));
     const lo = Math.min(0, ...cum), hi = Math.max(1, ...cum);
     const x = i => 2 + i * (W - 4) / Math.max(1, days.length - 1);
     const y = v => top + (hi - v) * (H - top - bottom) / (hi - lo || 1);
@@ -551,11 +567,11 @@
     if (days.length) for (const i of [0, 7, 14, 21, days.length - 1]) axis.appendChild(el("span", "", fmtShort(days[Math.min(i, days.length - 1)].date).toUpperCase()));
   }
 
-  function renderBarsChart(days) {
+  function renderBarsChart(days, start) {
     const svg = $("chart"); const W = 680, H = 240, pad = 6, mid = H * 0.55;
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
     const max = Math.max(1, ...days.map(d => Math.max(d.in, d.out)));
-    let run = 0; const pts = [];
+    let run = start || 0; const pts = [];
     const cum = days.map(d => (run += d.in - d.out));
     const cmax = Math.max(1, ...cum.map(Math.abs));
     const bw = (W - pad * 2) / Math.max(1, days.length);
@@ -648,13 +664,13 @@
   });
   function pill(text, cls) { return el("span", "pill " + (cls || ""), text); }
   function statusPill(p) {
-    const r = p.data; if (!r) return "";
+    const r = p.data; if (!r || p.node.rowPinned) return "";
     const key = r.overdue ? "overdue" : r.unclaimed ? "unclaimed" : r.status;
     const cls = r.overdue ? "bad" : r.unclaimed ? "info" : PAID.has(r.status) || r.status === "paid" ? "ok" : r.status === "processing" ? "info" : OPEN.has(r.status) || r.status === "pending" ? "warn" : BAD.has(r.status) ? "bad" : "";
     return pill(t("status")[key] || r.status, cls);
   }
   function invoiceActions(p) {
-    const r = p.data; const box = el("span"); if (!r) return box;
+    const r = p.data; const box = el("span"); if (!r || p.node.rowPinned) return box;
     if (r.payer_link) { const a = el("a", "cell-btn", t("pay_link")); a.href = r.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; box.appendChild(a); }
     if (status && status.demo_mode && OPEN.has(r.status)) {
       const b = el("button", "cell-btn", t("simulate")); b.type = "button";
@@ -664,36 +680,60 @@
     return box;
   }
   function billActions(p) {
-    const r = p.data; const box = el("span"); if (!r || r.status !== "pending") return box;
+    const r = p.data; const box = el("span"); if (!r || p.node.rowPinned || r.status !== "pending") return box;
     const b = el("button", "cell-btn", t("pay_paypal")); b.type = "button";
     b.addEventListener("click", () => { toAssistant(); send(t("cmd_pay_bill")(r.payee, r.id)); });
     box.appendChild(b); return box;
   }
   function twoLines(p) {
     const r = p.data; const box = el("div", "two-lines"); if (!r) return box;
+    if (p.node.rowPinned) { box.append(el("strong", "", r.payee)); return box; }
     box.append(el("strong", "", r.payee), el("span", "", [r.description, t("recurrence")[r.recurrence]].filter(Boolean).join(" · ")));
     return box;
   }
+  function statusLabel(p) { const r = p.data || {}; return t("status")[r.overdue ? "overdue" : r.unclaimed ? "unclaimed" : r.status] || r.status || ""; }
+  // totals of the rows left after a search, pinned under each money table
+  const TOTALS = { invoices: { label: "customer", sum: ["total", "due"] }, bills: { label: "payee", sum: ["amount"] } };
+  function updateTotals(name) {
+    const g = grids[name]; if (!g) return;
+    let n = 0; const row = {};
+    const spec = TOTALS[name];
+    g.forEachNodeAfterFilter(node => { n++; if (spec) for (const f of spec.sum) row[f] = (row[f] || 0) + (Number(node.data[f]) || 0); });
+    const box = document.querySelector(`.grid-tools[data-grid="${name}"] .grid-count`);
+    if (box) box.textContent = u("gridRows", { n });
+    if (spec) { row[spec.label] = u("gridTotal"); row.currency = currency; g.setGridOption("pinnedBottomRowData", n ? [row] : []); }
+  }
+  $$(".grid-tools").forEach(box => {
+    const name = box.dataset.grid;
+    box.querySelector("input").addEventListener("input", e => { if (grids[name]) { grids[name].setGridOption("quickFilterText", e.target.value); updateTotals(name); } });
+    box.querySelector(".grid-export").addEventListener("click", () => {
+      if (!grids[name]) return;
+      grids[name].exportDataAsCsv({ fileName: `destiny-pay-${name}.csv`, skipPinnedBottom: true,
+        columnKeys: grids[name].getColumns().map(c => c.getColId()).filter(id => !id.startsWith("ag-Grid") && !/^\d+$/.test(id)),
+        processCellCallback: p => (p.column.getColId() === "status" ? statusLabel(p.node) : p.value) });
+    });
+  });
   const narrow = () => window.matchMedia && matchMedia("(max-width: 560px)").matches;  // phones: dates are in the due list
   function columns(name) {
     const m = p => p.value == null ? "" : money(p.value, p.data && p.data.currency);
     const d = p => fmtShort(p.value);
     if (name === "invoices") return [
-      { field: "customer", headerName: t("col_customer"), flex: 1.3, minWidth: 120 },
-      { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: 110, flex: 0.9 },
+      { field: "customer", headerName: t("col_customer"), flex: 1.3, minWidth: 120, filter: true },
+      { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: 110, flex: 0.9, type: "rightAligned" },
+      { field: "due", headerName: u("colDue"), valueFormatter: m, minWidth: 104, flex: 0.8, type: "rightAligned", hide: narrow() },
       { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 90, flex: 0.7, hide: narrow() },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 132, flex: 1 },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 132, flex: 1, filter: true, filterValueGetter: statusLabel, getQuickFilterText: statusLabel },
       { headerName: t("col_actions"), cellRenderer: invoiceActions, width: status && status.demo_mode ? 256 : 150, sortable: false },
     ];
     if (name === "bills") return [
-      { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: 150, cellRenderer: twoLines },
-      { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 112, flex: 0.9 },
+      { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: 150, cellRenderer: twoLines, filter: true },
+      { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 112, flex: 0.9, type: "rightAligned" },
       { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 96, flex: 0.8, sort: "asc", hide: narrow() },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 196, flex: 1.1 },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 196, flex: 1.1, filter: true, filterValueGetter: statusLabel, getQuickFilterText: statusLabel },
       { headerName: t("col_actions"), cellRenderer: billActions, width: 164, sortable: false },
     ];
     return [
-      { field: "name", headerName: t("col_name"), flex: 1.2, minWidth: 140 },
+      { field: "name", headerName: t("col_name"), flex: 1.2, minWidth: 140, filter: true },
       { field: "email", headerName: t("col_email"), flex: 1.6, minWidth: 180 },
       { field: "kind", headerName: t("col_kind"), valueFormatter: p => t("kind")[p.value] || p.value, minWidth: 110, flex: 0.8 },
       { field: "notes", headerName: t("col_notes"), flex: 2, minWidth: 200 },
@@ -704,12 +744,14 @@
     if (grids[name] && grids[name].__lang !== lang) { grids[name].destroy(); delete grids[name]; }
     if (!grids[name]) {
       grids[name] = agGrid.createGrid(holder, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name), rowHeight: name === "bills" ? 56 : 46,
-        defaultColDef: { sortable: true, filter: false, resizable: true }, animateRows: true, localeText: { noRowsToShow: t("no_rows"), loadingOoo: "…" } });
+        defaultColDef: { sortable: true, filter: false, resizable: true, suppressHeaderMenuButton: true }, animateRows: true, localeText: { noRowsToShow: t("no_rows"), loadingOoo: "…" },
+        getRowClass: p => (p.node.rowPinned ? "row-total" : ""), onFilterChanged: () => updateTotals(name), onRowDataUpdated: () => updateTotals(name) });
       grids[name].__lang = lang; grids[name].__json = JSON.stringify(rows);
     } else {
       const json = JSON.stringify(rows);
       if (grids[name].__json !== json) { grids[name].setGridOption("rowData", rows); grids[name].__json = json; }
     }
+    updateTotals(name);
     // a short table fits its rows; a long one scrolls inside the view
     const fit = rows.length <= 14;
     if (grids[name].__fit !== fit) { grids[name].setGridOption("domLayout", fit ? "autoHeight" : "normal"); holder.classList.toggle("fit", fit); grids[name].__fit = fit; }
@@ -727,18 +769,22 @@
     body.appendChild(el("div", "", text)); x.appendChild(body); return x;
   }
 
+  let wasSeeding = false;
   function render(s) {
     lastState = s; currency = s.business.currency;
     $("bizName").textContent = s.business.name;
     $("bizSub").textContent = s.business.sample ? u("workspaceSub") : u("workspaceSub").split("·")[0].trim();
-    renderMetrics(s.overview); renderAreaChart(s.cashflow, s.overview.projected_30_days); renderBarsChart(s.cashflow);
+    const seeding = !!s.business.seeding;
+    renderMetrics(s.overview, seeding); renderAreaChart(s.cashflow, s.overview.projected_30_days, s.overview.cash_on_hand); renderBarsChart(s.cashflow, s.overview.cash_on_hand);
+    if (wasSeeding && !seeding) briefing();  // the daily brief was written before the sample invoices existed
+    wasSeeding = seeding;
     renderDue(s); renderLedger(s.movements || []); renderRec(s); renderCounts(s); renderAging(s.overview.receivable_aging);
     if (window.agGrid) { setGrid("invoices", s.invoices); setGrid("bills", s.bills); setGrid("contacts", s.contacts); }
     renderList("reminders", s.reminders, t("empty_reminders"), r => li(fmtWhen(r.due_at), r.text, r.kind === "remind_customer" ? "mail" : "bell"));
     renderList("activity", s.activity, t("empty_activity"), a => li(new Date(a.at * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }), a.text, "clock"));
     renderList("memory", s.facts, t("empty_memory"), f => li("", f, "spark"));
     pending = s.confirmations || [];
-    renderAuthCards(); renderSecurityCard();
+    renderAuthCards(); renderSecurityCard(); renderAuthBanner();
     if (wantOpen) { const c = pending.find(x => x.id === wantOpen); if (c) { wantOpen = null; if (!modalConf) openModal(c); } }
     if (modalConf) {
       const still = pending.find(c => c.id === modalConf.id && c.fingerprint === modalConf.fingerprint);

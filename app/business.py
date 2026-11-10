@@ -188,8 +188,8 @@ class Business:
                 raise ValidationError("Every item needs a name.")
             if not 0 < qty <= 1000:
                 raise ValidationError(f"Quantity {qty:g} for '{item_name}' is not valid (must be between 0 and 1000).")
-            if not 0 < price <= 10000:
-                raise ValidationError(f"Unit price {price:g} for '{item_name}' is not valid (must be between 0 and 10,000).")
+            if not 0.01 <= round(price, 2) <= 10000:
+                raise ValidationError(f"Unit price {price:g} for '{item_name}' is not valid (must be between 0.01 and 10,000).")
             clean.append({"name": item_name, "quantity": qty, "unit_price": round(price, 2)})
             total += qty * price
         if total > 10000:
@@ -326,6 +326,8 @@ class Business:
         if not 0 < amount <= 10000:
             raise ValidationError("The payment amount must be greater than 0.")
         method = method if method in METHODS else "OTHER"
+        if method == "PAYPAL":
+            raise ValidationError("A payment made through PayPal is recorded by PayPal itself; record_payment is only for cash, transfers, Yape, Plin or card.")
         paypal_method = method if method in PAYMENT_METHODS else "OTHER"
         label = {"YAPE": "Yape", "PLIN": "Plin", "CARD": "card"}.get(method, "")
         out = self.paypal.record_payment(invoice_id, amount, paypal_method, _clean(" ".join(filter(None, [label, note])), 200))
@@ -442,6 +444,8 @@ class Business:
             raise ValidationError("A PayPal payment for this bill is in progress. Wait for PayPal's confirmation before paying it another way.")
         if b["status"] != "pending":
             raise ValidationError("That bill is already paid.")
+        if method == "PAYPAL":
+            raise ValidationError("Paying with PayPal needs the owner's authorization: use request_pay_bill. mark_bill_paid is only for payments made outside PayPal.")
         view = self._settle_bill(b, method if method in METHODS else "OTHER", note)
         self.log("bill_paid", f"Paid {b['payee']} {i18n.fmt_money(b['amount'], b['currency'])} ({method})", "bill_paid", {"payee": b["payee"], "amount": [b["amount"], b["currency"]], "method": method}, bill_id=b["id"])
         return view
@@ -570,7 +574,8 @@ class Business:
                         continue  # another thread settled it first: it already announced it
                     if announce or unclaimed:
                         self.store.alert(self.ws, "a_payout_unclaimed" if unclaimed else "a_payout_done", payee=b["payee"], amount=[b["amount"], b["currency"]])
-                    self.log("bill_paid", f"Paid {b['payee']} {i18n.fmt_money(b['amount'], b['currency'])} with PayPal", "bill_paid_paypal", {"payee": b["payee"], "amount": [b["amount"], b["currency"]]}, bill_id=b["id"])
+                    self.log("bill_paid", f"Sent {b['payee']} {i18n.fmt_money(b['amount'], b['currency'])} with PayPal" + (" (not claimed yet)" if unclaimed else ""),
+                             "bill_sent_unclaimed" if unclaimed else "bill_paid_paypal", {"payee": b["payee"], "amount": [b["amount"], b["currency"]]}, bill_id=b["id"])
                     settled += 1
                 elif p["status"] == "unclaimed" and not unclaimed and announce:
                     self.store.alert(self.ws, "a_payout_done", payee=b["payee"], amount=[b["amount"], b["currency"]])
@@ -733,6 +738,7 @@ class Business:
             aging[key] = round(aging[key] + i["due"], 2)
         due_7 = round(sum(b["amount"] for b in bills if b["due_date"] <= week), 2)
         due_30 = round(sum(b["amount"] for b in bills if b["due_date"] <= month), 2)
+        cash = self.cash_on_hand()
         return {
             "period": period, "currency": self.currency, "today": today.isoformat(),
             "income": income, "expense": expense, "net": round(income - expense, 2),
@@ -743,9 +749,16 @@ class Business:
             "next_bills": [{"id": b["id"], "payee": b["payee"], "amount": b["amount"], "due_date": b["due_date"]} for b in bills[:5]],
             "top_expense_categories": sorted(({"category": k, "amount": round(v, 2)} for k, v in by_cat.items()), key=lambda x: -x["amount"])[:3],
             "top_customers": sorted(({"customer": k, "amount": round(v, 2)} for k, v in by_customer.items()), key=lambda x: -x["amount"])[:3],
-            "projected_30_days": round(receivable - due_30, 2),
+            # cash the business has recorded so far, plus what customers owe, minus bills due within 30 days
+            "cash_on_hand": cash,
+            "projected_30_days": round(cash + receivable - due_30, 2),
             "pending_reminders": len(self.list_reminders()),
         }
+
+    def cash_on_hand(self) -> float:
+        """Net of every sale, payment and expense recorded in the app: the starting point of the cash projection."""
+        row = self.store.one("SELECT COALESCE(SUM(CASE WHEN kind='income' THEN amount ELSE -amount END), 0) n FROM movements WHERE ws=?", (self.ws,))
+        return round(row["n"], 2)
 
     def cashflow(self, days: int = 30) -> list[dict]:
         """Expected money in (open invoices by due date) and out (bills by due date), day by day."""
@@ -858,8 +871,18 @@ class Business:
                 self.store.x("INSERT INTO confirmations(id,ws,conversation,kind,target,details,status,created_at,fingerprint) VALUES(?,?,?,?,?,?,?,?,?)",
                              (cid, self.ws, conversation, kind, str(target), json.dumps(details, ensure_ascii=False), "pending", time.time(), fp))
         return {"status": "awaiting_owner_confirmation", "confirmation_id": cid, "action": kind, "details": details, "fingerprint": fp,
+                "new_recipient": self._new_recipient(kind, details),
                 "instructions": "Read these details back to the owner. The action runs only when the owner presses Authorize or "
                                 "answers yes; you cannot execute it yourself."}
+
+    def _new_recipient(self, kind: str, details: dict) -> bool:
+        """True when a payout would go to an email this business has never paid successfully before."""
+        if kind != "pay_bill":
+            return False
+        email = normalize_email(details.get("email") or "")
+        row = self.store.one("SELECT 1 FROM payouts p JOIN bills b ON b.id=p.bill_id AND b.ws=p.ws "
+                             "WHERE p.ws=? AND p.status='done' AND lower(b.payee_email)=? LIMIT 1", (self.ws, email))
+        return row is None
 
     def expire_confirmations(self) -> None:
         self.store.x("UPDATE confirmations SET status='expired', resolved_at=? WHERE ws=? AND status='pending' AND created_at<?",
@@ -876,8 +899,13 @@ class Business:
             if changed:  # never show the owner a card for an operation that no longer matches
                 self.store.x("UPDATE confirmations SET status='invalidated', resolved_at=? WHERE id=? AND status='pending'", (time.time(), r["id"]))
         rows = self.store.q("SELECT * FROM confirmations WHERE ws=? AND status='pending' ORDER BY created_at", (self.ws,))
-        return [{"id": r["id"], "kind": r["kind"], "target": r["target"], "details": json.loads(r["details"]), "created_at": r["created_at"],
-                 "expires_at": r["created_at"] + CONFIRMATION_TTL, "fingerprint": r["fingerprint"]} for r in rows]
+        out = []
+        for r in rows:
+            details = json.loads(r["details"])
+            out.append({"id": r["id"], "kind": r["kind"], "target": r["target"], "details": details, "created_at": r["created_at"],
+                        "expires_at": r["created_at"] + CONFIRMATION_TTL, "fingerprint": r["fingerprint"],
+                        "new_recipient": self._new_recipient(r["kind"], details)})
+        return out
 
     def resolve_confirmation(self, cid: str, approve: bool, lang: str, fingerprint: str | None = None) -> tuple[bool, str, dict]:
         """Run (or drop) a pending action. Returns (done, spoken reply, result).

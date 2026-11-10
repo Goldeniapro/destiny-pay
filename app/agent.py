@@ -359,6 +359,10 @@ class DestinyPayAgent:
         if c.get("action") == "pay_bill" and (d.get("created_at") or 0) >= turn_started:
             conv.awaiting = ""  # a payee written down in this same turn: only the on-screen dialog can approve it
             return f"{reply} {t('button_only', conv.lang)}"
+        if c.get("action") == "pay_bill" and c.get("new_recipient"):
+            # money would go to an email never paid before (it may have just been changed): never on a spoken yes
+            conv.awaiting = ""
+            return f"{reply} {t('button_only_new', conv.lang)}"
         return f"{reply} {readback}"
 
     # --- the loop ----------------------------------------------------------------------
