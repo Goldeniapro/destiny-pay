@@ -929,10 +929,11 @@
       // fits a laptop without sideways scrolling: operation and contact share a cell, so do "how" and the receipt
       { field: "resolved_at", headerName: u("colWhen"), valueFormatter: p => p.value ? new Date(p.value * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "", minWidth: 96, flex: 0.7, sort: "desc", wrapText: true, autoHeight: true },
       { field: "kind", headerName: u("colOperation"), cellRenderer: p => { const r = p.data || {}; const box = el("div", "two-lines"); box.append(el("strong", "", u("kind_" + r.kind) || r.kind), el("span", "", r.who || "")); return box; },
-        filter: true, minWidth: 140, flex: 1.3, getQuickFilterText: p => `${u("kind_" + p.data.kind)} ${p.data.who || ""}`, filterValueGetter: p => u("kind_" + p.data.kind) },
+        valueGetter: p => p.data ? `${p.data.kind} ${p.data.who || ""}` : "", filter: true, minWidth: 140, flex: 1.3, getQuickFilterText: p => `${u("kind_" + p.data.kind)} ${p.data.who || ""}`, filterValueGetter: p => u("kind_" + p.data.kind) },
       { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 86, flex: 0.6, type: "rightAligned" },
       { field: "status", headerName: u("colDecision"), cellRenderer: decisionPill, minWidth: 112, flex: 0.8, filter: true, filterValueGetter: p => u("decision_" + p.data.status), getQuickFilterText: p => u("decision_" + p.data.status) },
       { field: "receipt", headerName: u("colReceipt"), cellRenderer: p => { const r = p.data || {}; const box = el("div", "two-lines"); box.append(el("strong", "", r.via ? u("via_" + r.via) : "—"), el("span", "mono", r.receipt || "")); return box; },
+        valueGetter: p => p.data ? `${p.data.via || ""} ${p.data.receipt || ""}` : "",  // re-drawn when "how" arrives after the row
         minWidth: 104, flex: 0.7, hide: narrow() },
       { field: "ref", headerName: "PayPal", minWidth: 84, flex: 0.8, cellClass: "mono", tooltipField: "ref", hide: narrow() },
     ];

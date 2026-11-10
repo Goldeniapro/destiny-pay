@@ -1142,7 +1142,13 @@ class Business:
                 self.store.x("UPDATE invoices SET refreshed_at=0 WHERE id=? AND ws=?", (details["invoice_id"], self.ws))
             self.log("confirmation_failed", f"{row['kind']} failed: {err}", "confirmation_failed", {"error": err[:120]}, confirmation_id=cid)
             return False, i18n.t("c_failed", lang, error=err[:200]), {}
-        ref = str(result.get("number") or result.get("batch_id") or result.get("id") or "")[:80] if isinstance(result, dict) else ""
+        # PayPal's own reference for what it did: the payout batch, or the invoice id; nothing when PayPal wasn't called
+        ref = ""
+        if isinstance(result, dict):
+            ref = {"pay_bill": result.get("payout_batch_id"), "cancel_payout": result.get("batch_id"),
+                   "send_invoice": result.get("id"), "cancel_invoice": result.get("id"), "record_payment": result.get("id"),
+                   "mark_bill_paid": None}.get(row["kind"]) or ""
+            ref = str(ref)[:80]
         self.store.x("UPDATE confirmations SET status='done', result=?, via=?, paypal_ref=? WHERE id=?",
                      (json.dumps(result, ensure_ascii=False, default=str)[:2000], via, ref, cid))
         # the receipt: what was authorized (its fingerprint), how, and what PayPal did

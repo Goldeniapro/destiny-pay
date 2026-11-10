@@ -315,7 +315,7 @@ def test_authorization_log_and_webhook_diagnostics(api, monkeypatch):
                                           "confirmation_id": cid, "approve": True, "lang": "en", "fingerprint": conf["fingerprint"]})
     assert r.status_code == 200 and r.json()["done"]
     log = client.get("/api/state", headers={"x-workspace": ws}).json()["authorizations"]
-    assert log[0]["status"] == "done" and log[0]["via"] == "button" and log[0]["receipt"] == conf["fingerprint"][:10] and log[0]["ref"]
+    assert log[0]["status"] == "done" and log[0]["via"] == "button" and log[0]["receipt"] == conf["fingerprint"][:10] and log[0]["ref"] == inv["id"]  # PayPal's own invoice id
     monkeypatch.setattr(main, "DEMO_MODE", False)
     monkeypatch.setattr(main, "WEBHOOK_ID", "WH")
     assert client.post("/api/paypal/webhook", json={"id": "x"}, headers={"paypal-cert-url": "https://evil.example/c"}).status_code == 400
