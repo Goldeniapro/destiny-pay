@@ -605,79 +605,57 @@
     );
   }
 
+  // charts (Chart.js, served from this app): money on the axes, a tooltip per day, readable at any size
+  const charts = {};
+  const compactMoney = v => { try { return new Intl.NumberFormat(lang, { style: "currency", currency, currencyDisplay: "narrowSymbol", notation: "compact", maximumFractionDigits: 1 }).format(v); } catch (e) { return String(Math.round(v)); } };
+  function chartBase() {
+    const C = window.Chart; if (!C) return null;
+    C.defaults.font.family = "Inter, system-ui, sans-serif"; C.defaults.font.size = 13; C.defaults.color = "#5a6b82";
+    return C;
+  }
+  function drawChart(id, config, key) {
+    const C = chartBase(); if (!C) return;
+    const ch = charts[id];
+    if (ch && ch.__key === key) return;  // same data: no redraw every refresh
+    if (ch) { ch.data = config.data; ch.options = config.options; ch.update("none"); ch.__key = key; return; }
+    charts[id] = new C($(id), config); charts[id].__key = key;
+  }
   function renderAreaChart(days, projected, start) {
     bigMoney($("projValue"), projected);
     $("projFrom").textContent = u("chartFrom", { amount: money(start || 0) });
-    const svg = $("areaChart"), W = 680, H = 230, top = 22, bottom = 18;
     let run = start || 0; const cum = days.map(d => (run += d.in - d.out));
-    const lo = Math.min(0, ...cum), hi = Math.max(1, ...cum);
-    const x = i => 2 + i * (W - 4) / Math.max(1, days.length - 1);
-    const y = v => top + (hi - v) * (H - top - bottom) / (hi - lo || 1);
-    const pts = cum.map((v, i) => `${x(i).toFixed(1)} ${y(v).toFixed(1)}`);
-    const line = "M" + (pts.length ? pts.join(" L") : `2 ${y(0)} L${W - 2} ${y(0)}`);
-    const zero = y(0).toFixed(1);
-    const lastX = cum.length ? x(cum.length - 1) : W - 2, lastY = cum.length ? y(cum[cum.length - 1]) : y(0);
-    // only numbers computed here go into this markup, never text from data
-    svg.innerHTML = `<defs><linearGradient id="areaFade" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#1688ee" stop-opacity=".19"/><stop offset="100%" stop-color="#1688ee" stop-opacity="0"/></linearGradient></defs>`
-      + `<path class="chart-gridline" d="M0 35H680M0 90H680M0 145H680M0 200H680"/>`
-      + `<path d="M0 ${zero}H680" stroke="#c9d6e6" stroke-dasharray="4 5"/>`
-      + `<path d="${line} L${lastX.toFixed(1)} ${H} L2 ${H}Z" fill="url(#areaFade)"/>`
-      + `<path d="${line}" fill="none" stroke="#0070e0" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>`
-      + `<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="6" fill="#0070e0" stroke="#fff" stroke-width="3"/>`;
-    // a scale you can read: the highest and lowest balance, and where the low point falls. The chart stretches,
-    // so labels are page text positioned over it (in %), never SVG text that would be squeezed
-    const wrap = svg.parentElement; wrap.classList.add("chart-wrap");
-    wrap.querySelectorAll(".chart-tag").forEach(n => n.remove());
-    const label = (tx, ty, text, anchor, cls) => { const d = el("span", "chart-tag " + (cls || "") + " " + (anchor || "start"), text);
-      const sr = svg.getBoundingClientRect(), wr = wrap.getBoundingClientRect();  // SVG elements have no offsetTop/offsetLeft
-      d.style.left = Math.round(sr.left - wr.left + tx / W * sr.width) + "px"; d.style.top = Math.round(sr.top - wr.top + ty / H * sr.height) + "px"; wrap.appendChild(d); };
-    if (cum.length) {
-      const maxV = Math.max(...cum), minV = Math.min(...cum), iMin = cum.indexOf(minV);
-      label(0, Math.max(0, y(maxV) - 30), money(maxV));
-      if (maxV - minV > 1) {
-        const mx = x(iMin), my = y(minV);
-        svg.insertAdjacentHTML("beforeend", `<circle cx="${mx.toFixed(1)}" cy="${my.toFixed(1)}" r="4.5" fill="#fff" stroke="${minV < 0 ? "#d0574e" : "#0070e0"}" stroke-width="2.4"/>`);
-        label(Math.min(Math.max(mx, 110), W - 110), Math.min(H - 30, my + 8), u("chartLow", { amount: money(minV), date: fmtShort(days[iMin].date) }), "middle", minV < 0 ? "bad" : "");
-      }
-      $("areaSummary").textContent = u("chartSummary", { start: money(start || 0), end: money(cum[cum.length - 1]), low: money(minV), date: fmtShort(days[iMin].date) });
-    }
-    svg.setAttribute("aria-label", u("chartTitle"));
-    svg.setAttribute("aria-describedby", "areaSummary");
-    const axis = $("areaAxis"); axis.textContent = "";
-    if (days.length) for (const i of [0, 7, 14, 21, days.length - 1]) axis.appendChild(el("span", "", fmtShort(days[Math.min(i, days.length - 1)].date).toUpperCase()));
+    if (!cum.length) return;
+    const minV = Math.min(...cum), iMin = cum.indexOf(minV);
+    $("areaSummary").textContent = u("chartSummary", { start: money(start || 0), end: money(cum[cum.length - 1]), low: money(minV), date: fmtShort(days[iMin].date) });
+    $("areaChart").setAttribute("aria-label", u("chartTitle")); $("areaChart").setAttribute("aria-describedby", "areaSummary");
+    const labels = days.map(d => fmtShort(d.date));
+    drawChart("areaChart", {
+      type: "line",
+      data: { labels, datasets: [{ label: u("chartBalance"), data: cum, borderColor: "#0f8f77", borderWidth: 3, tension: 0.25, fill: "origin",
+        backgroundColor: "rgba(25,194,160,.14)", pointRadius: cum.map((_, i) => (i === iMin || i === cum.length - 1 ? 5 : 0)),
+        pointBackgroundColor: cum.map((v, i) => (i === iMin && v < 0 ? "#c0392b" : "#0f8f77")), pointHoverRadius: 6,
+        segment: { borderColor: c => (c.p1.parsed.y < 0 ? "#c0392b" : "#0f8f77") } }] },
+      options: { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: "index", intersect: false },
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${u("chartBalance")}: ${money(c.parsed.y)}` } } },
+        scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 5, maxRotation: 0 } },
+                  y: { beginAtZero: true, ticks: { callback: v => compactMoney(v), maxTicksLimit: 5 }, grid: { color: c => (c.tick.value === 0 ? "#9fb0c4" : "#eef2f7") } } } },
+    }, lang + JSON.stringify(cum));
   }
 
   function renderBarsChart(days, start) {
-    const svg = $("chart"); const W = 680, H = 240, pad = 6, mid = H * 0.55;
-    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-    const max = Math.max(1, ...days.map(d => Math.max(d.in, d.out)));
-    let run = start || 0; const pts = [];
-    const cum = days.map(d => (run += d.in - d.out));
-    const cmax = Math.max(1, ...cum.map(Math.abs));
-    const bw = (W - pad * 2) / Math.max(1, days.length);
-    let out = `<line x1="0" y1="${mid}" x2="${W}" y2="${mid}" stroke="#e4ebf3"/>`;
-    days.forEach((d, i) => {
-      const bx = pad + i * bw + bw * 0.2, w = bw * 0.6;
-      if (d.in) { const h = (d.in / max) * (mid - 14); out += `<rect x="${bx}" y="${mid - h}" width="${w}" height="${h}" rx="3" fill="#19a37a"/>`; }
-      if (d.out) { const h = (d.out / max) * (H - mid - 14); out += `<rect x="${bx}" y="${mid}" width="${w}" height="${h}" rx="3" fill="#d0574e"/>`; }
-      const yy = cum[i] >= 0 ? mid - (cum[i] / cmax) * (mid - 12) : mid + (-cum[i] / cmax) * (H - mid - 10);
-      pts.push(`${pad + i * bw + bw / 2},${yy}`);
-    });
-    svg.innerHTML = out;  // the balance has its own chart (overview): mixing two scales on one axis confused readers
-    const NS = "http://www.w3.org/2000/svg";
-    let k = 0;
-    days.forEach(d => {  // a tooltip per bar: date and amount
-      for (const [v, key] of [[d.in, "chartIn"], [d.out, "chartOut"]]) {
-        if (!v) continue;
-        const rect = svg.querySelectorAll("rect")[k++]; if (!rect) continue;
-        const ttl = document.createElementNS(NS, "title"); ttl.textContent = `${fmtShort(d.date)} · ${u(key)}: ${money(v)}`; rect.appendChild(ttl);
-      }
-    });
-    const lab = (ty, text) => { const t_ = document.createElementNS(NS, "text"); t_.setAttribute("x", 4); t_.setAttribute("y", ty); t_.setAttribute("class", "chart-label"); t_.textContent = text; svg.appendChild(t_); };
-    lab(14, "+" + money(max)); lab(H - 4, "−" + money(max));
-    svg.setAttribute("aria-label", u("chartTitle"));
-    const axis = $("barsAxis"); axis.textContent = "";
-    if (days.length) for (const i of [0, 7, 14, 21, days.length - 1]) axis.appendChild(el("span", "", fmtShort(days[Math.min(i, days.length - 1)].date).toUpperCase()));
+    if (!days.length) return;
+    $("chart").setAttribute("aria-label", u("chartTitle"));
+    drawChart("chart", {
+      type: "bar",
+      data: { labels: days.map(d => fmtShort(d.date)), datasets: [
+        { label: u("chartIn"), data: days.map(d => d.in), backgroundColor: "#19a37a", borderRadius: 4, maxBarThickness: 22 },
+        { label: u("chartOut"), data: days.map(d => -d.out), backgroundColor: "#d0574e", borderRadius: 4, maxBarThickness: 22 }] },
+      options: { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: "index", intersect: false },
+        plugins: { legend: { position: "top", align: "end", labels: { boxWidth: 12, boxHeight: 12, usePointStyle: true } },
+                   tooltip: { callbacks: { label: c => `${c.dataset.label}: ${money(Math.abs(c.parsed.y))}` } } },
+        scales: { x: { stacked: true, grid: { display: false }, ticks: { maxTicksLimit: 6, maxRotation: 0 } },
+                  y: { stacked: true, ticks: { callback: v => compactMoney(Math.abs(v)), maxTicksLimit: 6 }, grid: { color: c => (c.tick.value === 0 ? "#9fb0c4" : "#eef2f7") } } } },
+    }, lang + JSON.stringify(days));
   }
 
   let dueJson = "";
@@ -795,8 +773,8 @@
           ariaColumnFiltered: "Coluna filtrada", ariaSortableColumn: "Pressione Enter para ordenar", ariaLabelSelectField: "Escolher", selectAll: "Selecionar tudo" },
   };
   const gridTheme = () => agGrid.themeQuartz.withParams({
-    fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, backgroundColor: "#ffffff", foregroundColor: "#0a2448",
-    headerBackgroundColor: "#f6f9fd", headerTextColor: "#5a6b82", headerFontSize: 11.5, headerFontWeight: 750,
+    fontFamily: "Inter, system-ui, sans-serif", fontSize: 14.5, backgroundColor: "#ffffff", foregroundColor: "#0a2448",
+    headerBackgroundColor: "#f6f9fd", headerTextColor: "#5a6b82", headerFontSize: 13, headerFontWeight: 750,
     borderColor: "#e4ebf3", rowBorder: { color: "#eef2f7" }, wrapperBorderRadius: 14, accentColor: "#0070e0", rowHoverColor: "#f2f8ff", cellHorizontalPadding: 12,
   });
   function pill(text, cls) { return el("span", "pill " + (cls || ""), text); }
@@ -948,7 +926,7 @@
     const holder = $("grid-" + name);
     if (grids[name] && grids[name].__lang !== lang) { grids[name].destroy(); delete grids[name]; }
     if (!grids[name]) {
-      grids[name] = agGrid.createGrid(holder, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name), rowHeight: name === "bills" || name === "auth" ? 56 : 46,
+      grids[name] = agGrid.createGrid(holder, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name), rowHeight: name === "bills" || name === "auth" ? 62 : 50,
         defaultColDef: { sortable: true, filter: false, resizable: true, suppressHeaderMenuButton: true }, animateRows: true, localeText: { ...(GRID_LOCALE[lang] || {}), noRowsToShow: t("no_rows"), loadingOoo: "…" },
         getRowClass: p => (p.node.rowPinned ? "row-total" : ""), onFilterChanged: () => updateTotals(name), onRowDataUpdated: () => updateTotals(name),
         ...(name === "invoices" ? { rowSelection: { mode: "multiRow", checkboxes: true, headerCheckbox: true, enableClickSelection: false,
@@ -1128,4 +1106,20 @@
   })();
   // installable on the phone (manifest + a network-first service worker that never caches money data)
   if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+  // the welcome page: what this is, the problem it solves, how it differs from PayPal alone; the demo loads behind it
+  function showIntro(show) {
+    const box = $("intro"); box.hidden = !show; document.body.classList.toggle("intro-open", show);
+    $("app").inert = show;
+    if (show) { box.scrollTop = 0; setTimeout(() => $("introEnter").focus(), 30); }
+    else { store.set("dp_intro_seen", "1"); if (!phone.matches) setTimeout(() => input.focus(), 30); }
+  }
+  $("introEnter").addEventListener("click", () => showIntro(false));
+  $("introEnter2").addEventListener("click", () => showIntro(false));
+  $("openIntro").addEventListener("click", () => showIntro(true));
+  $("openIntro2").addEventListener("click", () => { $("moreSheet").hidden = true; showIntro(true); });
+  $("intro").addEventListener("keydown", e => { if (e.key === "Escape") showIntro(false); });
+  $$("#intro [data-lang]").forEach(b => b.addEventListener("click", () => { const sel = $("lang"); sel.value = b.dataset.lang; sel.dispatchEvent(new Event("change")); }));
+  const markLang = () => $$("#intro [data-lang]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.lang === lang)));
+  $("lang").addEventListener("change", () => setTimeout(markLang, 0)); markLang();
+  if (store.get("dp_intro_seen") !== "1" || new URLSearchParams(location.search).has("intro")) showIntro(true);
 })();

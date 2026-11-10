@@ -47,6 +47,57 @@
   <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></symbol>
 </svg>
 
+<section class="intro" id="intro" hidden role="dialog" aria-modal="true" aria-labelledby="introTitle">
+ <div class="intro-hero"><div class="intro-wrap">
+  <div class="intro-bar"><span class="intro-brand"><span class="intro-mark"><svg class="ico logo-ico"><use href="#i-logo"/></svg></span><b>destiny<span>pay</span></b></span>
+   <span class="intro-langs" role="group" aria-label="Idioma / Language"><button type="button" data-lang="es">ES</button><button type="button" data-lang="en">EN</button><button type="button" data-lang="pt">PT</button></span></div>
+  <div class="intro-hero-grid">
+   <div><span class="intro-eyebrow" data-i18n="introTag"></span><h1 id="introTitle" data-i18n="introTitle"></h1><p class="intro-lead" data-i18n="introLead"></p>
+    <div class="intro-actions"><button type="button" class="intro-cta" id="introEnter"><span data-i18n="introEnter"></span><svg class="ico"><use href="#i-arrow"/></svg></button><a class="intro-link" href="#introProblem" data-i18n="introHow"></a></div>
+    <p class="intro-note" data-i18n="introNote"></p></div>
+   <div class="intro-chat" aria-hidden="true">
+    <div class="ic-msg me" data-i18n="introChat1"></div>
+    <div class="ic-card"><small data-i18n="introChat2Tag"></small><b>$90.00 · Sarah Miller</b><span data-i18n="introChat2"></span><em data-i18n="introChat2Btn"></em></div>
+    <div class="ic-msg ok" data-i18n="introChat3"></div>
+    <div class="ic-msg bot" data-i18n="introChat4"></div>
+   </div>
+  </div>
+ </div></div>
+ <div class="intro-wrap intro-body">
+  <h2 id="introProblem" data-i18n="introProblemTitle"></h2>
+  <div class="intro-grid3">
+   <article><b data-i18n="introP1"></b><p data-i18n="introP1Sub"></p></article>
+   <article><b data-i18n="introP2"></b><p data-i18n="introP2Sub"></p></article>
+   <article><b data-i18n="introP3"></b><p data-i18n="introP3Sub"></p></article>
+  </div>
+  <h2 data-i18n="introWhatTitle"></h2>
+  <div class="intro-grid4">
+   <article><svg class="ico"><use href="#i-receipt"/></svg><b data-i18n="introW1"></b><p data-i18n="introW1Sub"></p></article>
+   <article><svg class="ico"><use href="#i-send"/></svg><b data-i18n="introW2"></b><p data-i18n="introW2Sub"></p></article>
+   <article><svg class="ico"><use href="#i-bell"/></svg><b data-i18n="introW3"></b><p data-i18n="introW3Sub"></p></article>
+   <article><svg class="ico"><use href="#i-chart"/></svg><b data-i18n="introW4"></b><p data-i18n="introW4Sub"></p></article>
+  </div>
+  <h2 data-i18n="introDiffTitle"></h2>
+  <div class="intro-table" role="table">
+   <div class="it-row it-head" role="row"><span role="columnheader"></span><span role="columnheader" data-i18n="introColPaypal"></span><span role="columnheader" data-i18n="introColDestiny"></span></div>
+   <div class="it-row" role="row"><b role="rowheader" data-i18n="introD1"></b><span role="cell" data-i18n="introD1a"></span><span role="cell" data-i18n="introD1b"></span></div>
+   <div class="it-row" role="row"><b role="rowheader" data-i18n="introD2"></b><span role="cell" data-i18n="introD2a"></span><span role="cell" data-i18n="introD2b"></span></div>
+   <div class="it-row" role="row"><b role="rowheader" data-i18n="introD3"></b><span role="cell" data-i18n="introD3a"></span><span role="cell" data-i18n="introD3b"></span></div>
+   <div class="it-row" role="row"><b role="rowheader" data-i18n="introD4"></b><span role="cell" data-i18n="introD4a"></span><span role="cell" data-i18n="introD4b"></span></div>
+   <div class="it-row" role="row"><b role="rowheader" data-i18n="introD5"></b><span role="cell" data-i18n="introD5a"></span><span role="cell" data-i18n="introD5b"></span></div>
+  </div>
+  <p class="intro-honest" data-i18n="introHonest"></p>
+  <h2 data-i18n="introSafeTitle"></h2>
+  <ol class="intro-steps">
+   <li><span>1</span><b data-i18n="introS1"></b><p data-i18n="introS1Sub"></p></li>
+   <li><span>2</span><b data-i18n="introS2"></b><p data-i18n="introS2Sub"></p></li>
+   <li><span>3</span><b data-i18n="introS3"></b><p data-i18n="introS3Sub"></p></li>
+   <li><span>4</span><b data-i18n="introS4"></b><p data-i18n="introS4Sub"></p></li>
+  </ol>
+  <div class="intro-end"><div><h2 data-i18n="introDemoTitle"></h2><p data-i18n="introDemoSub"></p></div><button type="button" class="intro-cta" id="introEnter2"><span data-i18n="introEnter"></span><svg class="ico"><use href="#i-arrow"/></svg></button></div>
+  <p class="intro-legal" data-i18n="footLegal"></p>
+ </div>
+</section>
 <div class="site app is-loading" id="app" data-mview="assistant">
 <header class="topbar">
   <a href="/" class="identity" aria-label="Destiny Pay">
@@ -80,6 +131,7 @@
   <div class="sidenav-foot">
     <span class="sidebar-lower"><svg class="ico"><use href="#i-shield"/></svg><span data-i18n="sidebarFooter"></span></span>
     <button type="button" class="foot-link" id="new-biz"><svg class="ico"><use href="#i-refresh"/></svg><span data-i18n="newBiz"></span></button>
+    <button type="button" class="foot-link" id="openIntro"><svg class="ico"><use href="#i-spark"/></svg><span data-i18n="introOpen"></span></button>
     <a href="https://github.com/Goldeniapro/destiny-pay" target="_blank" rel="noopener noreferrer" class="foot-link"><svg class="ico"><use href="#i-arrowup"/></svg><span>GitHub</span></a>
     <a href="/privacy" target="_blank" rel="noopener" class="foot-link"><svg class="ico"><use href="#i-lock"/></svg><span data-i18n="privacy"></span></a>
     <p class="foot-legal" data-i18n="footLegal"></p>
@@ -102,14 +154,14 @@
       <div class="rec-banner"><span class="rec-icon"><svg class="ico"><use href="#i-spark"/></svg></span><div class="rec-text"><span class="mini-eyebrow" data-i18n="priorityLabel"></span><p id="recText">…</p></div><button type="button" id="askPriority" class="rec-action"><span data-i18n="priorityCTA"></span><svg class="ico"><use href="#i-arrow"/></svg></button></div>
       <div class="workspace-grid ov-main">
         <div class="workspace-box due-box"><div class="box-heading"><div><span class="mini-eyebrow" data-i18n="dueTag"></span><h2 data-i18n="dueTitle"></h2></div><span class="due-counter" id="dueCount">00</span></div><div class="due-list" id="dueList"></div><button type="button" class="due-button" id="dueAction"><span data-i18n="dueAction"></span><svg class="ico"><use href="#i-arrow"/></svg></button></div>
-        <div class="workspace-box chart-box"><div class="box-heading"><div><span class="mini-eyebrow" data-i18n="chartTag"></span><h2 data-i18n="chartTitle"></h2></div><span class="chart-period" data-i18n="chartPeriod"></span></div><div class="chart-value" id="projValue">—</div><div class="chart-from" id="projFrom"></div><svg class="finance-chart" id="areaChart" viewBox="0 0 680 230" preserveAspectRatio="none" role="img"></svg><p class="sr-only" id="areaSummary"></p><div class="chart-axis" id="areaAxis"></div></div>
+        <div class="workspace-box chart-box"><div class="box-heading"><div><span class="mini-eyebrow" data-i18n="chartTag"></span><h2 data-i18n="chartTitle"></h2></div><span class="chart-period" data-i18n="chartPeriod"></span></div><div class="chart-value" id="projValue">—</div><div class="chart-from" id="projFrom"></div><div class="chart-canvas area"><canvas id="areaChart" role="img"></canvas></div><p class="sr-only" id="areaSummary"></p><div class="chart-axis" id="areaAxis"></div></div>
       </div>
       <div class="metrics-grid" id="metrics"></div>
       <div class="workspace-box ledger-box"><div class="ledger-heading"><h2 data-i18n="ledgerTitle"></h2><span class="ledger-caption" data-i18n="ledgerCaption"></span></div><div class="table-scroll"><table class="ledger-table"><thead><tr><th data-i18n="colWho"></th><th data-i18n="colConcept"></th><th data-i18n="colDate"></th><th class="num" data-i18n="colAmount"></th><th data-i18n="colMethod"></th></tr></thead><tbody id="ledgerBody"></tbody></table></div></div>
     </div>
     <div class="ws-panel" data-panel="invoices" role="tabpanel" hidden><div class="aging" id="aging" hidden></div><div class="grid-tools" data-grid="invoices"><button type="button" class="grid-bulk" id="bulkRemind" hidden><svg class="ico"><use href="#i-bell"/></svg><span></span></button><label class="grid-search"><svg class="ico"><use href="#i-search"/></svg><span class="sr-only" data-i18n="gridSearch"></span><input type="search" data-i18n-ph="gridSearch" autocomplete="off"></label><span class="grid-count" aria-live="polite"></span><button type="button" class="grid-export"><svg class="ico"><use href="#i-download"/></svg><span data-i18n="gridExport"></span></button></div><div class="grid" id="grid-invoices"></div></div>
     <div class="ws-panel" data-panel="payouts" role="tabpanel" hidden><div class="grid-tools" data-grid="bills"><label class="grid-search"><svg class="ico"><use href="#i-search"/></svg><span class="sr-only" data-i18n="gridSearch"></span><input type="search" data-i18n-ph="gridSearch" autocomplete="off"></label><span class="grid-count" aria-live="polite"></span><button type="button" class="grid-export"><svg class="ico"><use href="#i-download"/></svg><span data-i18n="gridExport"></span></button></div><div class="grid" id="grid-bills"></div></div>
-    <div class="ws-panel" data-panel="forecast" role="tabpanel" hidden><div class="workspace-box"><div class="box-heading"><div><span class="mini-eyebrow" data-i18n="chartTag"></span><h2 data-i18n="chartTitle"></h2></div><div class="legend" id="legend"></div></div><svg id="chart" class="bars-chart" role="img" preserveAspectRatio="none"></svg><div class="chart-axis" id="barsAxis"></div></div></div>
+    <div class="ws-panel" data-panel="forecast" role="tabpanel" hidden><div class="workspace-box"><div class="box-heading"><div><span class="mini-eyebrow" data-i18n="chartTag"></span><h2 data-i18n="chartTitle"></h2></div><div class="legend" id="legend"></div></div><div class="chart-canvas bars"><canvas id="chart" role="img"></canvas></div><div class="chart-axis" id="barsAxis"></div></div></div>
     <div class="ws-panel" data-panel="reminders" role="tabpanel" hidden><ul class="list" id="reminders"></ul></div>
     <div class="ws-panel" data-panel="contacts" role="tabpanel" hidden><div class="grid-tools" data-grid="contacts"><label class="grid-search"><svg class="ico"><use href="#i-search"/></svg><span class="sr-only" data-i18n="gridSearch"></span><input type="search" data-i18n-ph="gridSearch" autocomplete="off"></label><span class="grid-count" aria-live="polite"></span><button type="button" class="grid-export"><svg class="ico"><use href="#i-download"/></svg><span data-i18n="gridExport"></span></button></div><div class="grid" id="grid-contacts"></div></div>
     <div class="ws-panel" data-panel="memory" role="tabpanel" hidden><ul class="list" id="memory"></ul></div>
@@ -173,6 +225,7 @@
   <button type="button" class="more-item" data-view="activity"><svg class="ico"><use href="#i-clock"/></svg><span data-i18n="tabActivity"></span></button>
   <button type="button" class="more-item" data-view="security"><svg class="ico"><use href="#i-shield"/></svg><span data-i18n="tabSecurity"></span></button>
   <button type="button" class="more-item" id="moreNewBiz"><svg class="ico"><use href="#i-refresh"/></svg><span data-i18n="newBiz"></span></button>
+  <button type="button" class="more-item" id="openIntro2"><svg class="ico"><use href="#i-spark"/></svg><span data-i18n="introOpen"></span></button>
   <a class="more-item" href="/privacy" target="_blank" rel="noopener"><svg class="ico"><use href="#i-lock"/></svg><span data-i18n="privacy"></span></a>
   <p class="foot-legal" data-i18n="footLegal"></p>
 </div></div>
@@ -198,6 +251,7 @@
 <dialog id="qr"><h2 id="qr-title"></h2><div id="qr-body"></div><p id="qr-link"></p><form method="dialog"><button class="btn btn-quiet" id="qr-close"></button></form></dialog>
 <audio id="player" preload="none"></audio>
 <script src="/static/vendor/ag-grid-community.min.js"></script>
+<script src="/static/vendor/chart.umd.js"></script>
 <script src="/static/i18n.js"></script>
 <script src="/static/app.js"></script>
 </body>
