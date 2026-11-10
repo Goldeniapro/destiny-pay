@@ -649,8 +649,8 @@
   function pill(text, cls) { return el("span", "pill " + (cls || ""), text); }
   function statusPill(p) {
     const r = p.data; if (!r) return "";
-    const key = r.overdue ? "overdue" : r.status;
-    const cls = r.overdue ? "bad" : PAID.has(r.status) || r.status === "paid" ? "ok" : r.status === "processing" ? "info" : OPEN.has(r.status) || r.status === "pending" ? "warn" : BAD.has(r.status) ? "bad" : "";
+    const key = r.overdue ? "overdue" : r.unclaimed ? "unclaimed" : r.status;
+    const cls = r.overdue ? "bad" : r.unclaimed ? "info" : PAID.has(r.status) || r.status === "paid" ? "ok" : r.status === "processing" ? "info" : OPEN.has(r.status) || r.status === "pending" ? "warn" : BAD.has(r.status) ? "bad" : "";
     return pill(t("status")[key] || r.status, cls);
   }
   function invoiceActions(p) {

@@ -409,11 +409,28 @@ def test_unclaimed_payout_returned_later_is_undone(biz, monkeypatch):
     biz.pay_bill_with_paypal(bill["id"])
     biz.check_payouts()
     assert biz.bill_view(bill["id"])["status"] == "paid" and biz.overview()["expense"] == 100
+    assert biz.bill_view(bill["id"])["unclaimed"] is True  # shown as sent but not claimed, never as plainly paid
     state["s"] = "RETURNED"
     biz.store.x("UPDATE payouts SET checked_at=0")
     biz.check_payouts()
     assert biz.bill_view(bill["id"])["status"] == "pending" and biz.overview()["expense"] == 0
     assert biz.store.alerts_since(biz.ws, 0)[-1]["key"] == "a_payout_failed"
+
+
+def test_claimed_payout_is_not_flagged_unclaimed(biz, monkeypatch):
+    bill = biz.add_bill("Proveedor", "x", 40, biz.today().isoformat(), "none", "p@example.com")
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda sbid, *a, **k: {"batch_header": {"payout_batch_id": "BC", "batch_status": "PENDING"}})
+    state = {"s": "UNCLAIMED"}
+    monkeypatch.setattr(biz.paypal, "get_payout", lambda bid: {"batch_header": {"payout_batch_id": bid, "batch_status": "SUCCESS"},
+                                                               "items": [{"transaction_status": state["s"]}]})
+    biz.pay_bill_with_paypal(bill["id"])
+    biz.check_payouts()
+    assert biz.bill_view(bill["id"])["unclaimed"] is True
+    state["s"] = "SUCCESS"
+    biz.store.x("UPDATE payouts SET checked_at=0")
+    biz.check_payouts()
+    view = biz.bill_view(bill["id"])
+    assert view["status"] == "paid" and view["unclaimed"] is False
 
 
 def test_failed_payout_can_be_retried(biz, monkeypatch):

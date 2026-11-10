@@ -387,7 +387,13 @@ class Business:
         overdue = b["status"] in ("pending", "processing") and b["due_date"] < self.today().isoformat()
         return {"id": b["id"], "payee": b["payee"], "payee_email": b["payee_email"], "description": b["description"],
                 "amount": b["amount"], "currency": b["currency"], "due_date": b["due_date"], "recurrence": b["recurrence"],
-                "status": b["status"], "method": b["method"], "overdue": overdue, "created_at": b["created_at"]}
+                "status": b["status"], "method": b["method"], "overdue": overdue, "created_at": b["created_at"],
+                # the money left the account but the recipient has not claimed it in PayPal yet
+                "unclaimed": b["status"] == "paid" and self._payout_unclaimed(b["id"])}
+
+    def _payout_unclaimed(self, bill_id) -> bool:
+        rows = self.store.q("SELECT status FROM payouts WHERE ws=? AND bill_id=? ORDER BY created_at DESC LIMIT 1", (self.ws, bill_id))
+        return bool(rows) and rows[0]["status"] == "unclaimed"
 
     def list_bills(self, status: str = "pending", within_days: int = 0) -> list[dict]:
         if status == "pending":
