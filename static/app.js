@@ -189,23 +189,47 @@
     x.onend = done; x.onerror = done;
     setTimeout(() => { if (token === speakToken) speechSynthesis.speak(x); }, 60);
   }
+  // Destiny always speaks with its own voice. If that voice hiccups, it retries; it never switches to the
+  // browser's system voice mid-conversation (only when the server has no voice at all). If the browser blocks
+  // audio until the first tap, the phrase waits for that tap instead of changing voice.
+  let blocked = null, voiceMissed = 0;
   function speak(text, speechId) {
     cancelListening();  // never listen while speaking: the mic would hear Destiny's own voice
     if (muted || !text) { setState("idle"); return; }
     stopSpeaking();
     const token = ++speakToken;
     const done = () => { if (token !== speakToken) return; clearTimeout(speakTimer); if (state === "speaking") setState("idle"); };
-    let fellBack = false;
-    const fallback = () => { if (token !== speakToken || fellBack) return; fellBack = true; browserSpeak(text, token, done); };
+    const ownVoice = !!(status && status.voice && status.voice.tts);
+    if (!ownVoice || !speechId) {
+      if (ownVoice) { done(); return; }  // a phrase without audio stays written; no second voice
+      setState("speaking"); speakTimer = setTimeout(done, 6000 + text.length * 110); browserSpeak(text, token, done); return;
+    }
     setState("speaking");
     clearTimeout(speakTimer);
-    speakTimer = setTimeout(done, 6000 + text.length * 110);  // never stay stuck in "speaking"
-    if (speechId && status && status.voice.tts) {
-      player.onended = done; player.onerror = fallback;
-      player.src = "/api/speech/" + encodeURIComponent(speechId);
-      player.play().catch(fallback);
-    } else browserSpeak(text, token, done);
+    speakTimer = setTimeout(done, 12000 + text.length * 110);  // never stay stuck in "speaking"
+    let tries = 0;
+    const play = () => {
+      if (token !== speakToken) return;
+      const attempt = tries;
+      player.onended = () => { voiceMissed = 0; done(); };
+      player.onerror = () => retry(attempt);
+      player.src = "/api/speech/" + encodeURIComponent(speechId) + (attempt ? `?r=${attempt}` : "");
+      player.play().catch(e => {
+        if (e && e.name === "NotAllowedError") { blocked = [text, speechId]; done(); return; }  // waits for the first tap
+        if (e && e.name === "AbortError") return;  // replaced by a newer phrase
+        retry(attempt);
+      });
+    };
+    const retry = attempt => {
+      if (token !== speakToken || attempt !== tries) return;  // the error event and the play() rejection are one failure
+      if (++tries <= 2) { setTimeout(play, 500 * tries); return; }
+      voiceMissed++; done();
+      if (voiceMissed === 1) toast(u("voiceHiccup"));  // said once; the reply is on screen
+    };
+    play();
   }
+  const playBlocked = () => { if (!blocked) return; const [tx, id] = blocked; blocked = null; speak(tx, id); };
+  window.addEventListener("pointerdown", playBlocked, true); window.addEventListener("keydown", playBlocked, true);
   function stopSpeaking() {
     speakToken++;
     try { player.pause(); player.onended = player.onerror = null; } catch (e) { /* ignore */ }
@@ -792,6 +816,12 @@
   }
   function invoiceActions(p) {
     const r = p.data; const box = el("span"); if (!r || p.node.rowPinned) return box;
+    if (OPEN.has(r.status)) {  // PayPal's own reminder to this customer, one click (no money moves)
+      const rb = el("button", "cell-btn" + (narrow() ? " icon-only" : ""), narrow() ? "" : u("inboxRemind")); rb.type = "button";
+      if (narrow()) { rb.appendChild(icon("bell")); rb.setAttribute("aria-label", u("inboxRemind") + " · " + r.customer); }
+      rb.addEventListener("click", () => remindInvoice(r.id, r.customer, rb));
+      box.append(rb);
+    }
     if (r.payer_link) {
       if (!narrow()) { const a = el("a", "cell-btn", t("pay_link")); a.href = r.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; box.append(a); }
       box.append(shareButton(r));
@@ -853,6 +883,23 @@
     const n = g.getSelectedRows().length;
     btn.hidden = !n; btn.querySelector("span").textContent = u("bulkRemind", { n });
   }
+  // one click: PayPal's reminder to everyone who still owes; or switch on automatic reminders every few days
+  $("remindAll").addEventListener("click", async () => {
+    const rows = ((lastState && lastState.invoices) || []).filter(i => OPEN.has(i.status));
+    if (!rows.length) { toast(u("remindAllNone")); return; }
+    if (!confirm(u("remindAllQ", { n: rows.length }))) return;
+    const btn = $("remindAll"); btn.disabled = true; let ok = 0;
+    for (const r of rows) { if (await remindInvoice(r.id, r.customer, null)) ok++; }
+    btn.disabled = false; toast(u("bulkDone", { ok, n: rows.length }));
+  });
+  $("autoRemind").addEventListener("change", async e => {
+    const on = e.target.checked;
+    try {
+      const r = await post("/api/auto-remind", { workspace_id: ws, on });
+      toast(on ? u("autoRemindOn", { n: (r.sent_now || []).length }) : u("autoRemindOff"));
+    } catch (err) { e.target.checked = !on; toast(t(err.status === 429 ? "rate" : "server")); }
+    refresh();
+  });
   $("bulkRemind").addEventListener("click", async () => {
     const g = grids.invoices; if (!g) return;
     const rows = g.getSelectedRows(); const btn = $("bulkRemind"); btn.disabled = true;
@@ -895,7 +942,7 @@
       { field: "due", headerName: u("colDue"), valueFormatter: m, minWidth: 104, flex: 0.8, type: "rightAligned", hide: narrow() },
       { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 90, flex: 0.7, hide: narrow() },
       { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 110, flex: 1, filter: true, filterValueGetter: statusLabel, getQuickFilterText: statusLabel, hide: narrow() },
-      { colId: "actions", headerName: t("col_actions"), cellRenderer: invoiceActions, width: narrow() ? 116 : status && status.demo_mode ? 290 : 196, sortable: false, pinned: "right" },
+      { colId: "actions", headerName: t("col_actions"), cellRenderer: invoiceActions, width: narrow() ? 116 : status && status.demo_mode ? 380 : 290, sortable: false, pinned: "right" },
     ];
     if (name === "bills") return [
       { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: narrow() ? 100 : 130, cellRenderer: twoLines, filter: true },
@@ -960,6 +1007,7 @@
   let wasSeeding = false;
   function render(s) {
     lastState = s; currency = s.business.currency;
+    $("autoRemind").checked = !!s.business.auto_remind;
     $("app").classList.remove("is-loading");
     $("bizName").textContent = s.business.name;
     $("bizSub").textContent = s.business.sample ? u("workspaceSub") : u("workspaceSub").split("·")[0].trim();
@@ -1007,7 +1055,8 @@
 
   // the phone's own share sheet (WhatsApp, SMS, email...) for PayPal's payment link; on a desktop, copy it
   function shareButton(inv) {
-    const b = el("button", "cell-btn", u("share")); b.type = "button";
+    const b = el("button", "cell-btn" + (narrow() ? " icon-only" : ""), narrow() ? "" : u("share")); b.type = "button";
+    if (narrow()) { b.appendChild(icon("send")); b.setAttribute("aria-label", u("share")); }
     b.addEventListener("click", async () => {
       const text = u("shareText", { amount: money(inv.due != null ? inv.due : inv.total, inv.currency) });
       try {

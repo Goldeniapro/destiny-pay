@@ -54,6 +54,9 @@ agent = DestinyPayAgent(business_factory)
 
 
 # --- background work: payment status, due reminders, bills due tomorrow ----------------------------
+AUTO_REMIND_LAST: dict[str, float] = {}
+
+
 def scheduler_tick() -> None:
     now = time.time()
     for r in store.q("SELECT DISTINCT ws FROM reminders WHERE status='pending' AND due_at<=?", (now,)):
@@ -71,6 +74,9 @@ def scheduler_tick() -> None:
                     biz.refresh_invoice(row["id"])
                 except PayPalError:
                     store.x("UPDATE invoices SET refreshed_at=? WHERE id=?", (now, row["id"]))
+            if biz.auto_remind and now - AUTO_REMIND_LAST.get(ws, 0) > 3600:  # at most hourly per business
+                AUTO_REMIND_LAST[ws] = now
+                biz.run_auto_reminders()
             tomorrow = (biz.today().toordinal() + 1)
             from datetime import date
             for b in store.q("SELECT * FROM bills WHERE ws=? AND status='pending' AND alerted=0 AND due_date=?",
@@ -87,10 +93,28 @@ def scheduler_tick() -> None:
             log.exception("payout check failed for a workspace")
 
 
+VOICE_CHECK_SECONDS = int(os.environ.get("DP_VOICE_CHECK_SECONDS", "600"))
+
+
+def voice_check(lang: str = "es") -> dict:
+    """Destiny's voice watchdog: time to first audio byte from Fish Audio, kept for /api/status and the logs."""
+    try:
+        ms = voice.probe(lang)
+        voice.health = {"ok": True, "ms": ms, "lang": lang, "at": int(time.time())}
+    except Exception as e:  # noqa: BLE001 - a failed check is data, never a crash
+        voice.health = {"ok": False, "lang": lang, "at": int(time.time()), "error": str(e)[:120]}
+        log.warning("voice check failed (%s): %s", lang, str(e)[:200])
+    return voice.health
+
+
 def _scheduler_loop(stop: threading.Event) -> None:
     last_purge = 0.0
+    last_voice, voice_round = time.time() - VOICE_CHECK_SECONDS + 30, 0  # first check 30 s after start
     while not stop.wait(15):
         try:
+            if voice.tts_enabled and time.time() - last_voice > VOICE_CHECK_SECONDS:
+                last_voice = time.time()
+                voice_check(LANGS[voice_round % len(LANGS)]); voice_round += 1
             scheduler_tick()
             if time.time() - last_purge > 3600:  # hourly: forget businesses idle for two days, trim logs
                 last_purge = time.time()
@@ -361,7 +385,8 @@ def status():
         "paypal_env": "demo" if DEMO_MODE else ("live" if "sandbox" not in paypal.base_url else "sandbox"),
         "currency": paypal.currency,
         "ai_ready": ai_configured(),
-        "voice": {"tts": voice.tts_enabled, "stt": voice.stt_enabled},
+        "voice": {"tts": voice.tts_enabled, "stt": voice.stt_enabled, **({"ok": voice.health.get("ok"), "ms": voice.health.get("ms"),
+                  "checked_at": voice.health.get("at")} if voice.health else {})},
         "webhooks": bool(WEBHOOK_ID) and not DEMO_MODE,
         "langs": list(LANGS),
         "build": (os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("RENDER_GIT_COMMIT") or "")[:7],
@@ -429,7 +454,7 @@ def state(request: Request, ws: str = Header(alias="x-workspace", **WS_ID), lang
         alerts.append({"id": a["id"], "text": text, "key": a["key"], "speech_id": voice.register(text, lang)})
     return {
         "business": {"name": biz.info["name"], "currency": biz.currency, "tz": biz.tz.key, "sample": bool(biz.info["demo"]),
-                     "seeding": ws in SEEDING},
+                     "seeding": ws in SEEDING, "auto_remind": biz.auto_remind},
         "overview": biz.overview("month"),
         "cashflow": biz.cashflow(30),
         "invoices": biz.list_invoices("all")[:50],
@@ -729,6 +754,22 @@ def remind(body: RemindIn, request: Request):
             raise HTTPException(404, "Not found")
         raise HTTPException(422 if getattr(e, "status", 0) in (400, 422) else 502, "PayPal refused the reminder (it allows 2 per invoice per day)")
     return {"ok": True, "customer": out["customer"]}
+
+
+class AutoRemindIn(BaseModel):
+    workspace_id: str = Field(**WS_ID)
+    on: bool
+
+
+@app.post("/api/auto-remind")
+def auto_remind(body: AutoRemindIn, request: Request):
+    """The owner's switch for automatic PayPal reminders to customers with overdue invoices (no money moves)."""
+    limit(request, "chat", "chat_ws", ws=body.workspace_id)
+    biz = open_business(body.workspace_id)
+    out = biz.set_auto_remind(body.on)
+    if body.on:
+        out["sent_now"] = biz.run_auto_reminders()
+    return out
 
 
 class VoiceConfirmIn(BaseModel):

@@ -85,7 +85,8 @@ class Store:
             for table, column, decl in (("bills", "anchor_day", "INTEGER NOT NULL DEFAULT 0"), ("payouts", "amount", "REAL NOT NULL DEFAULT 0"),
                                         ("payouts", "checked_at", "REAL NOT NULL DEFAULT 0"), ("payouts", "followed_up", "INTEGER NOT NULL DEFAULT 0"),
                                         ("confirmations", "fingerprint", "TEXT NOT NULL DEFAULT ''"),
-                                        ("confirmations", "via", "TEXT NOT NULL DEFAULT ''"), ("confirmations", "paypal_ref", "TEXT NOT NULL DEFAULT ''")):
+                                        ("confirmations", "via", "TEXT NOT NULL DEFAULT ''"), ("confirmations", "paypal_ref", "TEXT NOT NULL DEFAULT ''"),
+                                        ("workspaces", "auto_remind", "INTEGER NOT NULL DEFAULT 0")):
                 cols = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})").fetchall()}
                 if column not in cols:  # older database: add the column in place
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")

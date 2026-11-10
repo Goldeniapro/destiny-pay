@@ -137,3 +137,37 @@ def test_natural_commands_confirm_only_their_own_action():
 def test_thanks_is_an_acknowledgement_not_an_approval():
     assert classify_reply("ok thanks", "pay_bill") == "other" and classify_reply("listo, gracias", "pay_bill") == "other"
     assert classify_reply("sí, por favor", "pay_bill") == "yes"
+
+
+def test_voice_retries_a_hiccup_before_giving_up(monkeypatch):
+    """A slow or failing first answer from Fish Audio must not cost Destiny's voice (no switch to the system voice)."""
+    import app.voice as voice_mod
+    monkeypatch.setattr(voice_mod.time, "sleep", lambda s: None)
+    calls = []
+
+    def fish(request):
+        calls.append(1)
+        return httpx.Response(503, text="busy") if len(calls) == 1 else httpx.Response(200, content=b"ID3audio")
+
+    v = Voice(api_key="k", voice_id="v", transport=httpx.MockTransport(fish))
+    sid = v.register("Hola, te deben 545 dólares.", "es")
+    assert b"".join(v.stream(sid)) == b"ID3audio" and len(calls) == 2
+
+
+def test_voice_does_not_retry_a_request_error_and_counts_failures(monkeypatch):
+    import app.voice as voice_mod
+    monkeypatch.setattr(voice_mod.time, "sleep", lambda s: None)
+    calls = []
+    v = Voice(api_key="k", voice_id="v", transport=httpx.MockTransport(lambda r: calls.append(1) or httpx.Response(402, text="no credit")))
+    sid = v.register("Hola", "es")
+    with pytest.raises(VoiceError):
+        v.stream(sid)
+    assert len(calls) == 1 and v.failures == 1
+
+
+def test_voice_health_probe_measures_first_audio_byte():
+    v = Voice(api_key="k", voice_id="v", transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"ID3x")))
+    assert v.probe("es") >= 0
+    bad = Voice(api_key="k", voice_id="v", transport=httpx.MockTransport(lambda r: httpx.Response(500, text="down")))
+    with pytest.raises(VoiceError):
+        bad.probe("es")

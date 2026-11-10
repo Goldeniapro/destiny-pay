@@ -836,3 +836,32 @@ def test_partial_refund_uses_paypal_refund_amount(biz):
     before = biz.overview()["expense"]
     biz.refresh_invoice(inv["id"])
     assert round(biz.overview()["expense"] - before, 2) == 12.5
+
+
+def test_automatic_reminders_go_to_overdue_customers_every_few_days(biz):
+    inv = draft(biz)
+    biz.send_invoice(inv["id"])
+    biz.store.x("UPDATE invoices SET due_date=? WHERE id=?", ((biz.today() - timedelta(days=5)).isoformat(), inv["id"]))
+    assert biz.run_auto_reminders() == []  # off until the owner turns it on
+    sent = []
+    biz.paypal.remind_invoice = lambda i, note="": sent.append((i, note))
+    biz.set_auto_remind(True)
+    assert biz.run_auto_reminders() == ["Sarah Miller"] and sent == [(inv["id"], "")]  # PayPal's own text, no free text
+    assert biz.run_auto_reminders() == []  # not again within three days
+    biz.store.x("UPDATE activity SET at=at-4*86400 WHERE kind='invoice_reminded_auto'")
+    assert biz.run_auto_reminders() == ["Sarah Miller"]
+    assert biz.store.alerts_since(biz.ws, 0)[-1]["key"] == "a_auto_reminded"
+    biz.set_auto_remind(False)
+    biz.store.x("UPDATE activity SET at=at-4*86400 WHERE kind='invoice_reminded_auto'")
+    assert biz.run_auto_reminders() == []
+
+
+def test_automatic_reminders_skip_invoices_that_are_not_overdue_or_were_reminded(biz):
+    inv = draft(biz)
+    biz.send_invoice(inv["id"])
+    biz.paypal.remind_invoice = lambda i, note="": None
+    biz.set_auto_remind(True)
+    assert biz.run_auto_reminders() == []  # not overdue yet
+    biz.store.x("UPDATE invoices SET due_date=? WHERE id=?", ((biz.today() - timedelta(days=1)).isoformat(), inv["id"]))
+    biz.remind_invoice(inv["id"])  # the owner reminded by hand today
+    assert biz.run_auto_reminders() == []

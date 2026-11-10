@@ -374,3 +374,13 @@ def test_installable_app_never_caches_money_data(api):
     manifest = client.get("/static/manifest.webmanifest")
     assert manifest.status_code == 200 and json.loads(manifest.text)["start_url"] == "/"
     assert "content-security-policy" in sw.headers
+
+
+def test_auto_remind_switch_is_per_business(api):
+    client, _ = api
+    ws = new_ws(client, sample=False)
+    other = new_ws(client, sample=False)
+    assert client.post("/api/auto-remind", json={"workspace_id": ws, "on": True}).json()["auto_remind"] is True
+    assert client.get("/api/state", headers={"x-workspace": ws}).json()["business"]["auto_remind"] is True
+    assert client.get("/api/state", headers={"x-workspace": other}).json()["business"]["auto_remind"] is False
+    assert client.post("/api/auto-remind", json={"workspace_id": "f" * 32, "on": True}).status_code == 404

@@ -372,6 +372,47 @@ class Business:
         self.log("invoice_reminded", f"Payment reminder sent to {view['customer']}", "invoice_reminded", {"name": view["customer"]}, invoice_id=invoice_id)
         return {"ok": True, "invoice_id": invoice_id, "customer": view["customer"]}
 
+    # --- automatic reminders to customers who owe ---------------------------------------
+    AUTO_REMIND_DAYS = 3
+
+    @property
+    def auto_remind(self) -> bool:
+        row = self.store.one("SELECT auto_remind FROM workspaces WHERE id=?", (self.ws,))
+        return bool(row and row["auto_remind"])
+
+    def set_auto_remind(self, on: bool) -> dict:
+        """The owner's switch: PayPal's own reminder to every customer whose invoice is overdue, every few days.
+        No money moves and no free text is sent, so it doesn't need the authorization dialog."""
+        self.store.x("UPDATE workspaces SET auto_remind=? WHERE id=?", (1 if on else 0, self.ws))
+        self.log("auto_remind", f"Automatic reminders {'on' if on else 'off'}", "auto_remind_on" if on else "auto_remind_off", {})
+        return {"auto_remind": bool(on)}
+
+    def _last_reminded(self, invoice_id: str) -> float:
+        row = self.store.one("SELECT MAX(at) t FROM activity WHERE ws=? AND kind IN ('invoice_reminded','invoice_reminded_auto') "
+                             "AND json_extract(data, '$.invoice_id')=?", (self.ws, invoice_id))
+        return float(row["t"] or 0) if row else 0.0
+
+    def run_auto_reminders(self, limit: int = 5) -> list[str]:
+        """Send PayPal's reminder for overdue invoices not reminded in the last few days. Returns who was reminded."""
+        if not self.auto_remind:
+            return []
+        due_before = time.time() - self.AUTO_REMIND_DAYS * 86400
+        sent = []
+        for inv in self.list_invoices("all"):
+            if len(sent) >= limit:
+                break
+            if not inv["overdue"] or inv["status"] not in UNPAID_STATUSES or self._last_reminded(inv["id"]) > due_before:
+                continue
+            try:
+                self.paypal.remind_invoice(inv["id"], "")
+            except PayPalError:
+                continue  # PayPal allows two a day per invoice; the next run tries again
+            self.log("invoice_reminded_auto", f"Automatic payment reminder sent to {inv['customer']}", "invoice_reminded_auto",
+                     {"name": inv["customer"]}, invoice_id=inv["id"])
+            self.store.alert(self.ws, "a_auto_reminded", name=inv["customer"], amount=[inv["due"], inv["currency"]])
+            sent.append(inv["customer"])
+        return sent
+
     def record_payment(self, invoice_id: str, amount: float, method: str = "CASH", note: str = "", request_id: str = "") -> dict:
         row = self._owned(invoice_id)
         amount = round(float(amount), 2)

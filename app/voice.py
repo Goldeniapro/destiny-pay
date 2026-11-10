@@ -43,7 +43,9 @@ class Voice:
         self.daily_bytes = int(os.environ.get("DP_TTS_DAILY_BYTES", "2000000"))  # ~US$30/day at US$15 per million bytes
         self.daily_audio = int(os.environ.get("DP_STT_DAILY_BYTES", "300000000"))  # uploaded audio per day for transcription
         self._audio_day, self._audio_used = time.strftime("%Y-%m-%d"), 0
-        self._http = httpx.Client(base_url=FISH_URL, timeout=httpx.Timeout(60, connect=10), transport=transport)
+        self._http = httpx.Client(base_url=FISH_URL, timeout=httpx.Timeout(30, connect=6), transport=transport)
+        self.failures = 0
+        self.health: dict = {}  # last health check per language: ok, ms, at, error
         self._texts: OrderedDict[str, tuple[str, str, float]] = OrderedDict()  # speech id -> (text, lang, created)
         self._audio: OrderedDict[str, bytes] = OrderedDict()  # sha(text, voice) -> mp3, for repeated phrases
         self._lock = threading.Lock()
@@ -104,17 +106,52 @@ class Voice:
         self._charge(len(text.encode("utf-8")))
         body = {"text": text, "reference_id": voice_id, "format": "mp3", "mp3_bitrate": 128,
                 "latency": "balanced", "chunk_length": 200, "normalize": True, "language": SPEECH_LANG.get(lang, "en")}
-        req = self._http.build_request("POST", "/v1/tts", json=body,
-                                       headers={"Authorization": f"Bearer {self.api_key}", "model": self.model})
-        try:
-            resp = self._http.send(req, stream=True)
-        except httpx.HTTPError as e:
-            raise VoiceError(f"voice service unreachable: {e.__class__.__name__}") from e
-        if resp.status_code != 200:
-            detail = resp.read()[:200]
-            resp.close()
-            raise VoiceError(f"voice service error {resp.status_code}: {detail!r}")
+        resp = self._open(body)
         return self._relay(resp, key, True)  # replaying an id never pays twice
+
+    def _open(self, body: dict, attempts: int = 3) -> httpx.Response:
+        """Start a Fish Audio stream; a hiccup (network, 429, 5xx) is retried before giving up, so the
+        page doesn't lose Destiny's voice over one slow answer."""
+        last = ""
+        for i in range(attempts):
+            req = self._http.build_request("POST", "/v1/tts", json=body,
+                                           headers={"Authorization": f"Bearer {self.api_key}", "model": self.model})
+            try:
+                resp = self._http.send(req, stream=True)
+            except httpx.HTTPError as e:
+                last = f"voice service unreachable: {e.__class__.__name__}"
+            else:
+                if resp.status_code == 200:
+                    return resp
+                detail = resp.read()[:200]
+                resp.close()
+                last = f"voice service error {resp.status_code}: {detail!r}"
+                if resp.status_code not in (408, 409, 425, 429) and resp.status_code < 500:
+                    break  # a request error won't fix itself
+            if i + 1 < attempts:
+                time.sleep(0.4 * (i + 1))
+        self.failures += 1
+        raise VoiceError(last)
+
+    def probe(self, lang: str = "es") -> float:
+        """Health check: time to the first audio byte for a short phrase in Destiny's voice (milliseconds)."""
+        voice_id = self.voice_for(lang)
+        if not self.api_key or not voice_id:
+            raise VoiceError("voice not configured")
+        t0 = time.time()
+        body = {"text": {"es": "Listo.", "en": "Done.", "pt": "Pronto."}.get(lang, "Done."), "reference_id": voice_id, "format": "mp3",
+                "mp3_bitrate": 64, "latency": "balanced", "normalize": True, "language": SPEECH_LANG.get(lang, "en")}
+        self._charge(8)
+        resp = self._open(body, attempts=2)
+        try:
+            for chunk in resp.iter_bytes():
+                if chunk:
+                    break
+            else:
+                raise VoiceError("voice service returned no audio")
+        finally:
+            resp.close()
+        return round((time.time() - t0) * 1000)
 
     def _relay(self, resp: httpx.Response, key: str, cache: bool) -> Iterator[bytes]:
         chunks: list[bytes] = []
