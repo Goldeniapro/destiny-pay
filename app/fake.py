@@ -73,7 +73,7 @@ class FakePayPal:
         self._save(inv)
         return inv
 
-    def send_invoice(self, invoice_id):
+    def send_invoice(self, invoice_id, request_id=""):
         inv = self._get(invoice_id)
         if inv["status"] != "DRAFT":
             raise PayPalError("PayPal 422: INVOICE_ALREADY_SENT")
@@ -90,7 +90,7 @@ class FakePayPal:
             raise PayPalError("PayPal 422: CANNOT_REMIND_INVOICE")
         return {}
 
-    def cancel_invoice(self, invoice_id, note=""):
+    def cancel_invoice(self, invoice_id, note="", request_id=""):
         inv = self._get(invoice_id)
         if inv["status"] in PAID_STATUSES | {"DRAFT"}:
             raise PayPalError("PayPal 422: CANNOT_CANCEL_INVOICE")
@@ -98,7 +98,7 @@ class FakePayPal:
         self._save(inv)
         return {}
 
-    def record_payment(self, invoice_id, amount, method="CASH", note=""):
+    def record_payment(self, invoice_id, amount, method="CASH", note="", request_id="", payment_date=""):
         inv = self._get(invoice_id)
         if inv["status"] in {"DRAFT", "CANCELLED"} | PAID_STATUSES:
             raise PayPalError("PayPal 422: CANNOT_RECORD_PAYMENT")
@@ -129,8 +129,12 @@ class FakePayPal:
         with self._lock:
             if sender_batch_id in self.payouts:
                 raise PayPalError("PayPal 400: SENDER_BATCH_ID_ALREADY_USED")
-            batch = {"batch_header": {"payout_batch_id": f"DEMO-BATCH-{len(self.payouts) + 1:04d}", "batch_status": "SUCCESS",
+            n = len(self.payouts) + 1
+            # like the sandbox: an email with no PayPal account leaves the payout unclaimed
+            item_status = "UNCLAIMED" if "unclaimed" in receiver_email else "SUCCESS"
+            batch = {"batch_header": {"payout_batch_id": f"DEMO-BATCH-{n:04d}", "batch_status": "SUCCESS",
                                       "sender_batch_header": {"sender_batch_id": sender_batch_id}},
+                     "items": [{"payout_item_id": f"DEMO-ITEM-{n:04d}", "transaction_status": item_status}],
                      "receiver": receiver_email, "amount": f"{float(amount):.2f}"}
             self.payouts[sender_batch_id] = batch
             return batch
@@ -140,3 +144,13 @@ class FakePayPal:
             if b["batch_header"]["payout_batch_id"] == payout_batch_id:
                 return b
         raise PayPalError("PayPal 404: BATCH_NOT_FOUND")
+
+    def cancel_payout_item(self, payout_item_id, request_id=""):
+        for b in self.payouts.values():
+            for it in b.get("items", []):
+                if it["payout_item_id"] == payout_item_id:
+                    if it["transaction_status"] != "UNCLAIMED":
+                        raise PayPalError("PayPal 422: ITEM_CANNOT_BE_CANCELLED", status=422, uncertain=False)
+                    it["transaction_status"] = "RETURNED"
+                    return {"payout_item_id": payout_item_id, "transaction_status": "RETURNED"}
+        raise PayPalError("PayPal 404: ITEM_NOT_FOUND", status=404, uncertain=False)

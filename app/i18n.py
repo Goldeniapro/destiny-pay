@@ -23,6 +23,12 @@ T: dict[str, dict[str, str]] = {
     "c_pay_bill_pending": {"es": 'Listo, envié el pago de {amount} a {payee} con PayPal. Te aviso cuando PayPal lo confirme.', "en": "Done, I sent the {amount} payment to {payee} with PayPal. I'll tell you when PayPal confirms it.", "pt": 'Pronto, enviei o pagamento de {amount} a {payee} com PayPal. Aviso quando o PayPal confirmar.'},
     "rb_send_invoice": {"es": 'Para confirmar: enviar la factura de {total} a {name}, al correo {email}. Di «sí» o toca Autorizar.', "en": 'To confirm: send {name} the {total} invoice at {email}. Say “yes” or tap Authorize.', "pt": 'Para confirmar: enviar a fatura de {total} para {name}, no e-mail {email}. Diga «sim» ou toque em Autorizar.'},
     "rb_cancel_invoice": {"es": 'Para confirmar: cancelar la factura de {total} de {name} ({email}). Di «sí» o toca Autorizar.', "en": "To confirm: cancel {name}'s {total} invoice ({email}). Say “yes” or tap Authorize.", "pt": 'Para confirmar: cancelar a fatura de {total} de {name} ({email}). Diga «sim» ou toque em Autorizar.'},
+    "rb_record_payment": {"es": 'Para confirmar: registrar que {name} pagó {total} en {method}. Di «sí» o toca Autorizar.', "en": 'To confirm: record that {name} paid {total} by {method}. Say “yes” or tap Authorize.', "pt": 'Para confirmar: registrar que {name} pagou {total} em {method}. Diga “sim” ou toque em Autorizar.'},
+    "rb_cancel_payout": {"es": 'Para confirmar: cancelar el pago no reclamado de {total} a {name} ({email}); PayPal te devuelve el dinero. Di «sí» o toca Autorizar.', "en": 'To confirm: cancel the unclaimed {total} payment to {name} ({email}); PayPal returns the money. Say “yes” or tap Authorize.', "pt": 'Para confirmar: cancelar o pagamento não resgatado de {total} a {name} ({email}); o PayPal devolve o dinheiro. Diga “sim” ou toque em Autorizar.'},
+    "c_record_payment": {"es": 'Listo, registré el pago de {amount} de {name} en su factura de PayPal.', "en": "Done, I recorded {name}'s {amount} payment on their PayPal invoice.", "pt": 'Pronto, registrei o pagamento de {amount} de {name} na fatura do PayPal.'},
+    "c_cancel_payout": {"es": 'Listo, cancelé el pago a {payee}: PayPal te devuelve {amount} y la cuenta queda pendiente otra vez.', "en": 'Done, I cancelled the payment to {payee}: PayPal returns {amount} and the bill is pending again.', "pt": 'Pronto, cancelei o pagamento a {payee}: o PayPal devolve {amount} e a conta fica pendente de novo.'},
+    "a_payout_cancelled": {"es": 'Cancelaste el pago no reclamado a {payee}: PayPal devuelve {amount}.', "en": 'You cancelled the unclaimed payment to {payee}: PayPal returns {amount}.', "pt": 'Você cancelou o pagamento não resgatado a {payee}: o PayPal devolve {amount}.'},
+    "a_invoice_refunded": {"es": 'Se reembolsaron {amount} a {name}.', "en": '{amount} was refunded to {name}.', "pt": '{amount} foi reembolsado a {name}.'},
     "rb_pay_bill_button": {"es": 'Para confirmar: pagar {total} a {name} con PayPal, al correo {email}. Es el primer pago a ese correo: autorízalo con el botón.', "en": 'To confirm: pay {name} {total} with PayPal at {email}. It is the first payment to that email: authorize it with the button.', "pt": 'Para confirmar: pagar {total} a {name} com PayPal, no e-mail {email}. É o primeiro pagamento a esse e-mail: autorize com o botão.'},
     "rb_pay_bill": {"es": 'Para confirmar: pagar {total} a {name} con PayPal, al correo {email}. Di «sí» o toca Autorizar.', "en": 'To confirm: pay {name} {total} with PayPal at {email}. Say “yes” or tap Authorize.', "pt": 'Para confirmar: pagar {total} a {name} com PayPal, no e-mail {email}. Diga «sim» ou toque em Autorizar.'},
     "button_only": {"es": 'Como el destinatario se anotó recién, autoriza este pago con el botón de la pantalla.', "en": 'Because the payee was added just now, authorize this payment with the button on screen.', "pt": 'Como o destinatário acabou de ser cadastrado, autorize este pagamento com o botão da tela.'},
@@ -66,6 +72,9 @@ _DAYS = {"es": ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"], "en": ["Mon"
 # --- activity log, shown in the owner's language ------------------------------------
 LOG = {
     "invoice_draft": {"es": 'Borrador de factura para {name}: {amount}', "en": 'Draft invoice for {name}: {amount}', "pt": 'Rascunho de fatura para {name}: {amount}'},
+    "authorized": {"es": 'Autorizado por ti ({via}): {kind} · recibo {receipt} · PayPal {ref}', "en": 'Authorized by you ({via}): {kind} · receipt {receipt} · PayPal {ref}', "pt": 'Autorizado por você ({via}): {kind} · recibo {receipt} · PayPal {ref}'},
+    "payout_cancelled": {"es": 'Pago no reclamado a {payee} cancelado: PayPal devuelve {amount}', "en": 'Unclaimed payment to {payee} cancelled: PayPal returns {amount}', "pt": 'Pagamento não resgatado a {payee} cancelado: o PayPal devolve {amount}'},
+    "invoice_refunded": {"es": 'Reembolso de {amount} a {name}', "en": 'Refund of {amount} to {name}', "pt": 'Reembolso de {amount} a {name}'},
     "invoice_paid": {"es": '{name} pagó {amount} en línea', "en": '{name} paid {amount} online', "pt": '{name} pagou {amount} online'},
     "invoice_sent": {"es": 'Factura enviada a {name} ({email})', "en": 'Invoice sent to {name} ({email})', "pt": 'Fatura enviada a {name} ({email})'},
     "invoice_cancelled": {"es": 'Factura de {name} cancelada', "en": 'Invoice for {name} cancelled', "pt": 'Fatura de {name} cancelada'},
@@ -89,10 +98,22 @@ LOG = {
 }
 
 
+KIND_LABELS = {
+    "es": {"send_invoice": "enviar factura", "cancel_invoice": "cancelar factura", "pay_bill": "pago a proveedor",
+           "record_payment": "registrar cobro", "cancel_payout": "cancelar pago no reclamado", "button": "botón", "voice": "voz"},
+    "en": {"send_invoice": "send invoice", "cancel_invoice": "cancel invoice", "pay_bill": "supplier payment",
+           "record_payment": "record payment", "cancel_payout": "cancel unclaimed payment", "button": "button", "voice": "voice"},
+    "pt": {"send_invoice": "enviar fatura", "cancel_invoice": "cancelar fatura", "pay_bill": "pagamento a fornecedor",
+           "record_payment": "registrar recebimento", "cancel_payout": "cancelar pagamento não resgatado", "button": "botão", "voice": "voz"},
+}
+
+
 def log_text(key: str, lang: str, params: dict, fallback: str) -> str:
     tpl = LOG.get(key)
     if not tpl:
         return fallback
+    labels = KIND_LABELS.get(lang, KIND_LABELS["en"])
+    params = {k: (labels.get(v, v) if k in ("kind", "via") and isinstance(v, str) else v) for k, v in params.items()}
     try:
         return (tpl.get(lang) or tpl["en"]).format(**params)
     except (KeyError, IndexError):
@@ -104,6 +125,17 @@ def t(key: str, lang: str, **params) -> str:
         key += "_one"
     text = T[key].get(lang) or T[key]["en"]
     return text.format(**params) if params else text
+
+
+METHOD_NAMES = {
+    "es": {"CASH": "efectivo", "BANK_TRANSFER": "transferencia", "YAPE": "Yape", "PLIN": "Plin", "CARD": "tarjeta", "OTHER": "otro medio"},
+    "en": {"CASH": "cash", "BANK_TRANSFER": "bank transfer", "YAPE": "Yape", "PLIN": "Plin", "CARD": "card", "OTHER": "another method"},
+    "pt": {"CASH": "dinheiro", "BANK_TRANSFER": "transferência", "YAPE": "Yape", "PLIN": "Plin", "CARD": "cartão", "OTHER": "outro meio"},
+}
+
+
+def method_name(method: str, lang: str) -> str:
+    return METHOD_NAMES.get(lang, METHOD_NAMES["en"]).get(method, method or "")
 
 
 def fmt_money(amount: float, currency: str, lang: str = "en") -> str:

@@ -358,12 +358,15 @@
 
   // ---------- authorization gate ----------
   let pending = [], modalConf = null, lastFocus = null;
-  const KIND_TYPE = { send_invoice: "modalInvoiceType", cancel_invoice: "modalCancelType", pay_bill: "modalPayoutType" };
-  const KIND_TITLE = { send_invoice: "modalTitleInvoice", cancel_invoice: "modalTitleCancel", pay_bill: "modalTitlePayout" };
+  const KIND_TYPE = { send_invoice: "modalInvoiceType", cancel_invoice: "modalCancelType", pay_bill: "modalPayoutType",
+                      record_payment: "modalRecordType", cancel_payout: "modalCancelPayoutType" };
+  const KIND_TITLE = { send_invoice: "modalTitleInvoice", cancel_invoice: "modalTitleCancel", pay_bill: "modalTitlePayout",
+                       record_payment: "modalTitleRecord", cancel_payout: "modalTitleCancelPayout" };
   const amountOf = c => { const d = c.details || {}; return d.total != null ? d.total : d.amount; };
   const whoOf = c => { const d = c.details || {}; return d.customer || d.payee || ""; };
   const conceptOf = c => {
     const d = c.details || {};
+    if (d.method) return `${String((u("method") || {})[d.method] || d.method).replace(/\s*\(.*\)$/, "")} · ${u("modalOutsidePayPal")}`;
     if ((d.items || []).length) return d.items.map(it => `${it.quantity} × ${it.name} · ${money(it.unit_price, d.currency)}`).join(" · ");
     return d.description || "—";
   };
@@ -663,10 +666,15 @@
     borderColor: "#e4ebf3", rowBorder: { color: "#eef2f7" }, wrapperBorderRadius: 14, accentColor: "#0070e0", rowHoverColor: "#f2f8ff", cellHorizontalPadding: 12,
   });
   function pill(text, cls) { return el("span", "pill " + (cls || ""), text); }
+  function decisionPill(p) {
+    const r = p.data; if (!r) return "";
+    const cls = r.status === "done" ? "ok" : r.status === "failed" || r.status === "invalidated" ? "bad" : r.status === "denied" ? "warn" : "";
+    return pill(u("decision_" + r.status) || r.status, cls);
+  }
   function statusPill(p) {
     const r = p.data; if (!r || p.node.rowPinned) return "";
-    const key = r.overdue ? "overdue" : r.unclaimed ? "unclaimed" : r.status;
-    const cls = r.overdue ? "bad" : r.unclaimed ? "info" : PAID.has(r.status) || r.status === "paid" ? "ok" : r.status === "processing" ? "info" : OPEN.has(r.status) || r.status === "pending" ? "warn" : BAD.has(r.status) ? "bad" : "";
+    const key = r.overdue ? "overdue" : r.unclaimed ? "unclaimed" : r.held ? "held" : r.status;
+    const cls = r.overdue ? "bad" : r.unclaimed ? "info" : r.held ? "warn" : PAID.has(r.status) || r.status === "paid" ? "ok" : r.status === "processing" ? "info" : OPEN.has(r.status) || r.status === "pending" ? "warn" : BAD.has(r.status) ? "bad" : "";
     return pill(t("status")[key] || r.status, cls);
   }
   function invoiceActions(p) {
@@ -680,9 +688,15 @@
     return box;
   }
   function billActions(p) {
-    const r = p.data; const box = el("span"); if (!r || p.node.rowPinned || r.status !== "pending") return box;
+    const r = p.data; const box = el("span"); if (!r || p.node.rowPinned) return box;
+    if (r.unclaimed) {
+      const c = el("button", "cell-btn warn", u("cancelPayout")); c.type = "button";
+      c.addEventListener("click", () => propose("cancel_payout", r.id, c));
+      box.appendChild(c); return box;
+    }
+    if (r.status !== "pending") return box;
     const b = el("button", "cell-btn", t("pay_paypal")); b.type = "button";
-    b.addEventListener("click", () => { toAssistant(); send(t("cmd_pay_bill")(r.payee, r.id)); });
+    b.addEventListener("click", () => propose("pay_bill", r.id, b));
     box.appendChild(b); return box;
   }
   function twoLines(p) {
@@ -691,7 +705,16 @@
     box.append(el("strong", "", r.payee), el("span", "", [r.description, t("recurrence")[r.recurrence]].filter(Boolean).join(" · ")));
     return box;
   }
-  function statusLabel(p) { const r = p.data || {}; return t("status")[r.overdue ? "overdue" : r.unclaimed ? "unclaimed" : r.status] || r.status || ""; }
+  // a proposal made from a table row: the server builds it and the authorization dialog opens, nothing runs yet
+  async function propose(kind, target, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const r = await post("/api/proposals", { workspace_id: ws, kind, target: String(target) });
+      wantOpen = r.confirmation_id; await refresh();
+    } catch (e) { toast(e.status === 429 ? t("rate") : u("proposalFailed")); }
+    finally { if (btn) btn.disabled = false; }
+  }
+  function statusLabel(p) { const r = p.data || {}; return t("status")[r.overdue ? "overdue" : r.unclaimed ? "unclaimed" : r.held ? "held" : r.status] || r.status || ""; }
   // totals of the rows left after a search, pinned under each money table
   const TOTALS = { invoices: { label: "customer", sum: ["total", "due"] }, bills: { label: "payee", sum: ["amount"] } };
   function updateTotals(name) {
@@ -710,7 +733,9 @@
       if (!grids[name]) return;
       grids[name].exportDataAsCsv({ fileName: `destiny-pay-${name}.csv`, skipPinnedBottom: true,
         columnKeys: grids[name].getColumns().map(c => c.getColId()).filter(id => !id.startsWith("ag-Grid") && !/^\d+$/.test(id)),
-        processCellCallback: p => (p.column.getColId() === "status" ? statusLabel(p.node) : p.value) });
+        processCellCallback: p => (name === "auth" && p.column.getColId() === "status" ? u("decision_" + p.value)
+          : name === "auth" && p.column.getColId() === "kind" ? u("kind_" + p.value)
+          : p.column.getColId() === "status" ? statusLabel(p.node) : p.value) });
     });
   });
   const narrow = () => window.matchMedia && matchMedia("(max-width: 560px)").matches;  // phones: dates are in the due list
@@ -731,6 +756,16 @@
       { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 96, flex: 0.8, sort: "asc", hide: narrow() },
       { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 196, flex: 1.1, filter: true, filterValueGetter: statusLabel, getQuickFilterText: statusLabel },
       { headerName: t("col_actions"), cellRenderer: billActions, width: 164, sortable: false },
+    ];
+    if (name === "auth") return [
+      { field: "resolved_at", headerName: u("colWhen"), valueFormatter: p => p.value ? new Date(p.value * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "", minWidth: 120, flex: 0.9, sort: "desc" },
+      { field: "kind", headerName: u("colOperation"), valueFormatter: p => u("kind_" + p.value) || p.value, filter: true, minWidth: 190, flex: 1.2, getQuickFilterText: p => u("kind_" + p.value) },
+      { field: "who", headerName: u("colWho"), flex: 1, minWidth: 120, filter: true },
+      { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 100, flex: 0.7, type: "rightAligned" },
+      { field: "status", headerName: u("colDecision"), cellRenderer: decisionPill, minWidth: 150, flex: 0.9, filter: true, filterValueGetter: p => u("decision_" + p.data.status), getQuickFilterText: p => u("decision_" + p.data.status) },
+      { field: "via", headerName: u("colVia"), valueFormatter: p => p.value ? u("via_" + p.value) : "", minWidth: 80, flex: 0.5, hide: narrow() },
+      { field: "receipt", headerName: u("colReceipt"), minWidth: 110, flex: 0.7, cellClass: "mono", hide: narrow() },
+      { field: "ref", headerName: "PayPal", minWidth: 150, flex: 1, cellClass: "mono", hide: narrow() },
     ];
     return [
       { field: "name", headerName: t("col_name"), flex: 1.2, minWidth: 140, filter: true },
@@ -779,7 +814,7 @@
     if (wasSeeding && !seeding) briefing();  // the daily brief was written before the sample invoices existed
     wasSeeding = seeding;
     renderDue(s); renderLedger(s.movements || []); renderRec(s); renderCounts(s); renderAging(s.overview.receivable_aging);
-    if (window.agGrid) { setGrid("invoices", s.invoices); setGrid("bills", s.bills); setGrid("contacts", s.contacts); }
+    if (window.agGrid) { setGrid("invoices", s.invoices); setGrid("bills", s.bills); setGrid("contacts", s.contacts); setGrid("auth", s.authorizations || []); }
     renderList("reminders", s.reminders, t("empty_reminders"), r => li(fmtWhen(r.due_at), r.text, r.kind === "remind_customer" ? "mail" : "bell"));
     renderList("activity", s.activity, t("empty_activity"), a => li(new Date(a.at * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }), a.text, "clock"));
     renderList("memory", s.facts, t("empty_memory"), f => li("", f, "spark"));
@@ -874,6 +909,11 @@
       return;
     }
     if (e.key === "Escape" && !$("moreSheet").hidden) { closeMore(); $("moreBtn").focus(); return; }
+    if (e.key === "Tab" && !$("moreSheet").hidden) {
+      const f = $$("#moreSheet button, #moreSheet a"); const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
     if (e.key === "Escape") { cancelListening(); queue = []; stopSpeaking(); }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); toAssistant(); setTimeout(() => input.focus(), 0); }
   });

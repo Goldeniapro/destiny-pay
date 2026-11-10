@@ -110,7 +110,7 @@ def test_confirmation_rejects_wrong_states(biz):
 def test_failed_execution_is_reported(biz, monkeypatch):
     inv = draft(biz)
     req = biz.request_confirmation("send_invoice", inv["id"])
-    monkeypatch.setattr(biz.paypal, "send_invoice", lambda i: (_ for _ in ()).throw(PayPalError("PayPal 503: busy")))
+    monkeypatch.setattr(biz.paypal, "send_invoice", lambda i, **k: (_ for _ in ()).throw(PayPalError("PayPal 503: busy")))
     done, reply, _ = biz.resolve_confirmation(req["confirmation_id"], True, "es")
     assert not done and "503" in reply
     assert biz.store.one("SELECT status FROM confirmations WHERE id=?", (req["confirmation_id"],))["status"] == "failed"
@@ -267,8 +267,8 @@ def test_record_payment_uses_paypal_payment_id(biz, monkeypatch):
     ids = iter(["P1", "P2"])
     original = biz.paypal.record_payment
 
-    def rec(i, amount, method="CASH", note=""):
-        original(i, amount, method, note)
+    def rec(i, amount, method="CASH", note="", **kw):
+        original(i, amount, method, note, **kw)
         return {"payment_id": next(ids)}
 
     monkeypatch.setattr(biz.paypal, "record_payment", rec)
@@ -654,3 +654,99 @@ def test_unverifiable_paypal_state_runs_nothing_and_keeps_the_card(biz, monkeypa
     monkeypatch.setattr(biz.paypal, "get_invoice", real)
     assert [c["id"] for c in biz.pending_confirmations()] == [req["confirmation_id"]]
     assert biz.resolve_confirmation(req["confirmation_id"], True, "en", fingerprint=req["fingerprint"])[0] is True
+
+
+# ---------------------------------------------------------------- phase 1 (v7): every money change behind the gate
+def test_recording_a_cash_payment_needs_an_authorization(biz):
+    inv = draft(biz)
+    biz.send_invoice(inv["id"])
+    req = biz.request_confirmation("record_payment", f"{inv['id']}|4000|YAPE")
+    d = req["details"]
+    assert d["amount"] == 40 and d["method"] == "YAPE" and biz.invoice_view(inv["id"])["due"] == 90  # nothing recorded yet
+    done, reply, _ = biz.resolve_confirmation(req["confirmation_id"], True, "es", req["fingerprint"])
+    assert done and biz.invoice_view(inv["id"])["due"] == 50 and biz.invoice_view(inv["id"])["status"] == "PARTIALLY_PAID"
+    receipt = biz.authorizations()[0]
+    assert receipt["kind"] == "record_payment" and receipt["status"] == "done" and receipt["via"] == "button" and len(receipt["receipt"]) == 10
+
+
+def test_record_payment_proposal_rejects_paypal_overpayment_and_tampering(biz):
+    inv = draft(biz)
+    biz.send_invoice(inv["id"])
+    for bad in (f"{inv['id']}|4000|PAYPAL", f"{inv['id']}|9001|CASH", f"{inv['id']}|0|CASH", f"{inv['id']}|abc|CASH"):
+        with pytest.raises(ValidationError):
+            biz.request_confirmation("record_payment", bad)
+    req = biz.request_confirmation("record_payment", f"{inv['id']}|9000|CASH")
+    biz.record_payment(inv["id"], 10, "CASH")  # the amount due changed after the proposal
+    done, reply, _ = biz.resolve_confirmation(req["confirmation_id"], True, "en", req["fingerprint"])
+    assert not done and biz.invoice_view(inv["id"])["due"] == 80
+
+
+def test_unclaimed_payout_can_be_cancelled_with_authorization(biz):
+    bill = biz.add_bill("Proveedor", "hilo", 120, biz.today().isoformat(), "none", "nobody@unclaimed.example")
+    biz.pay_bill_with_paypal(bill["id"])
+    biz.check_payouts()
+    view = biz.bill_view(bill["id"])
+    assert view["status"] == "paid" and view["unclaimed"] and biz.overview()["expense"] == 120
+    req = biz.request_confirmation("cancel_payout", str(bill["id"]))
+    done, reply, result = biz.resolve_confirmation(req["confirmation_id"], True, "es", req["fingerprint"])
+    assert done and "cancelé" in reply
+    view = biz.bill_view(bill["id"])
+    assert view["status"] == "pending" and not view["unclaimed"] and biz.overview()["expense"] == 0
+    assert biz.store.alerts_since(biz.ws, 0)[-1]["key"] == "a_payout_cancelled"
+    with pytest.raises(ValidationError):  # nothing left to cancel
+        biz.request_confirmation("cancel_payout", str(bill["id"]))
+
+
+def test_claimed_payout_cannot_be_cancelled(biz):
+    bill = biz.add_bill("Proveedor", "hilo", 50, biz.today().isoformat(), "none", "real@example.com")
+    biz.pay_bill_with_paypal(bill["id"])
+    biz.check_payouts()
+    with pytest.raises(ValidationError, match="hasn't claimed"):
+        biz.request_confirmation("cancel_payout", str(bill["id"]))
+
+
+def test_held_payout_stays_in_progress(biz, monkeypatch):
+    bill = biz.add_bill("Proveedor", "x", 70, biz.today().isoformat(), "none", "p@example.com")
+    monkeypatch.setattr(biz.paypal, "create_payout", lambda sbid, *a, **k: {"batch_header": {"payout_batch_id": "BH", "batch_status": "PENDING"}})
+    monkeypatch.setattr(biz.paypal, "get_payout", lambda bid: {"batch_header": {"payout_batch_id": bid, "batch_status": "SUCCESS"},
+                                                               "items": [{"transaction_status": "ONHOLD"}]})
+    biz.pay_bill_with_paypal(bill["id"])
+    biz.check_payouts()
+    view = biz.bill_view(bill["id"])
+    assert view["status"] == "processing" and view["held"] and biz.overview()["expense"] == 0
+
+
+def test_refunded_invoice_takes_the_income_back_once(biz, monkeypatch):
+    inv = draft(biz)
+    biz.send_invoice(inv["id"])
+    biz.paypal.mark_paid(inv["id"])
+    biz.refresh_invoice(inv["id"])
+    assert biz.overview()["income"] == 90
+    stored = biz.paypal._get(inv["id"])
+    stored["status"] = "PARTIALLY_REFUNDED"
+    stored["refunded_amount"] = {"currency_code": "USD", "value": "30.00"}
+    biz.paypal._save(stored)
+    biz.refresh_invoice(inv["id"])
+    biz.refresh_invoice(inv["id"])  # twice: recorded once
+    o = biz.overview()
+    assert o["expense"] == 30 and o["net"] == 60
+    assert biz.store.alerts_since(biz.ws, 0)[-1]["key"] == "a_invoice_refunded"
+
+
+def test_reminders_never_carry_free_text(biz, monkeypatch):
+    inv = draft(biz)
+    biz.send_invoice(inv["id"])
+    sent = []
+    monkeypatch.setattr(biz.paypal, "remind_invoice", lambda i, note="": sent.append(note) or {})
+    biz.remind_invoice(inv["id"], "Your account is locked, pay at evil.example")
+    assert sent == [""]
+
+
+def test_each_authorization_uses_its_own_paypal_request_id(biz, monkeypatch):
+    inv = draft(biz)
+    seen = []
+    original = biz.paypal.send_invoice
+    monkeypatch.setattr(biz.paypal, "send_invoice", lambda i, request_id="": seen.append(request_id) or original(i))
+    req = biz.request_confirmation("send_invoice", inv["id"])
+    biz.resolve_confirmation(req["confirmation_id"], True, "es", req["fingerprint"])
+    assert seen == [f"dp-{req['confirmation_id']}"]

@@ -209,8 +209,8 @@ def test_every_tool_runs(setup):
     calls = [
         ("find_contacts", {"query": "sarah"}), ("save_contact", {"name": "Lucho", "email": "lucho@example.com", "kind": "customer", "notes": ""}),
         ("list_invoices", {"status": "unpaid", "customer": ""}), ("get_invoice", {"invoice_id": inv["id"]}),
-        ("remind_invoice", {"invoice_id": inv["id"], "note": ""}), ("show_qr", {"invoice_id": inv["id"]}),
-        ("record_payment", {"invoice_id": inv["id"], "amount": 10, "method": "PLIN", "note": ""}),
+        ("remind_invoice", {"invoice_id": inv["id"]}), ("show_qr", {"invoice_id": inv["id"]}),
+        ("request_record_payment", {"invoice_id": inv["id"], "amount": 10, "method": "PLIN"}),
         ("add_bill", {"payee": "Marta", "description": "Alquiler", "amount": 300, "due_date": biz.today().isoformat(), "recurrence": "monthly", "payee_email": "marta@example.com"}),
         ("list_bills", {"status": "pending", "within_days": 30}), ("request_pay_bill", {"bill_id": 1}),
         ("mark_bill_paid", {"bill_id": 1, "method": "CASH", "note": ""}),

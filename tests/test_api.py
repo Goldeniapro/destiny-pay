@@ -280,3 +280,36 @@ def test_first_payment_readback_does_not_invite_a_spoken_yes():
     conf = {"kind": "pay_bill", "new_recipient": True, "details": {"payee": "Textiles", "amount": 180, "currency": "USD", "email": "p@x.example"}}
     assert "botón" in main.readback(conf, "es") and "sí" not in main.readback(conf, "es")
     assert "Say" in main.readback({**conf, "new_recipient": False}, "en")
+
+
+def test_proposals_from_the_tables_go_through_the_dialog(api):
+    client, _ = api
+    ws = new_ws(client, sample=False)
+    biz = main.business_factory(ws)
+    bill = biz.add_bill("Marta", "Alquiler", 300, biz.today().isoformat(), "none", "marta@example.com")
+    r = client.post("/api/proposals", json={"workspace_id": ws, "kind": "pay_bill", "target": str(bill["id"])})
+    assert r.status_code == 200 and biz.bill_view(bill["id"])["status"] == "pending"  # proposed, nothing paid
+    st = client.get("/api/state", headers={"x-workspace": ws}).json()
+    assert [c["kind"] for c in st["confirmations"]] == ["pay_bill"] and st["authorizations"] == []
+    assert client.post("/api/proposals", json={"workspace_id": ws, "kind": "record_movement", "target": "1"}).status_code == 422
+    assert client.post("/api/proposals", json={"workspace_id": ws, "kind": "pay_bill", "target": "999"}).status_code in (404, 422)
+    other = new_ws(client, sample=False)
+    assert client.post("/api/proposals", json={"workspace_id": other, "kind": "pay_bill", "target": str(bill["id"])}).status_code in (404, 422)
+
+
+def test_authorization_log_and_webhook_diagnostics(api, monkeypatch):
+    client, _ = api
+    ws = new_ws(client, sample=False)
+    biz = main.business_factory(ws)
+    inv = biz.draft_invoice("Ana", "ana@example.com", [{"name": "x", "quantity": 1, "unit_price": 5}], "")
+    cid = client.post("/api/proposals", json={"workspace_id": ws, "kind": "send_invoice", "target": inv["id"]}).json()["confirmation_id"]
+    conf = client.get("/api/state", headers={"x-workspace": ws}).json()["confirmations"][0]
+    r = client.post("/api/confirm", json={"workspace_id": ws, "conversation_id": "11111111-1111-4111-8111-111111111111",
+                                          "confirmation_id": cid, "approve": True, "lang": "en", "fingerprint": conf["fingerprint"]})
+    assert r.status_code == 200 and r.json()["done"]
+    log = client.get("/api/state", headers={"x-workspace": ws}).json()["authorizations"]
+    assert log[0]["status"] == "done" and log[0]["via"] == "button" and log[0]["receipt"] == conf["fingerprint"][:10] and log[0]["ref"]
+    monkeypatch.setattr(main, "DEMO_MODE", False)
+    monkeypatch.setattr(main, "WEBHOOK_ID", "WH")
+    client.post("/api/paypal/webhook", json={"id": "x"}, headers={"paypal-cert-url": "https://evil.example/c"})
+    assert client.get("/api/status").json()["webhook_last"]["refused"] == "cert_host"

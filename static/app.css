@@ -338,3 +338,9 @@ body{background:var(--bg)}
 .modal-legal{margin:12px 0 0!important}
 .modal-top{padding:14px 22px}
 @media (max-height:820px) and (min-width:601px){.modal-badge{display:none}.modal-body h2{margin-top:0;font-size:22px}.modal-legal{display:none}.modal-amount strong{font-size:30px}}
+
+/* ---- v7 phase 1: authorization log ---- */
+.auth-log{margin-top:18px}
+.auth-log-sub{font-size:12.5px;color:#5a6b82;margin:6px 0 12px;line-height:1.55}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#33465e}
+.cell-btn.warn{color:#8a4b08;background:#fff3e2;border-color:#f3d9a8}

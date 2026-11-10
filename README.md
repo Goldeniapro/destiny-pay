@@ -1,5 +1,7 @@
 # Destiny Pay 🎙️
 
+[![CI](https://github.com/Goldeniapro/destiny-pay/actions/workflows/ci.yml/badge.svg)](https://github.com/Goldeniapro/destiny-pay/actions/workflows/ci.yml) · [Security model](SECURITY.md) · MIT license
+
 **The voice-first money desk for small businesses.** Talk to it in Spanish, English or Portuguese: Destiny Pay bills your customers with PayPal invoices, pays your suppliers with PayPal Payouts, remembers every customer and every debt, reminds you before things are due, and tells you how your business is really doing. **Nothing moves without your confirmation, and that rule is enforced in code, not in a prompt.**
 
 > 🔗 **Live demo:** https://web-production-5eebcf.up.railway.app (PayPal Sandbox, no real money) · 🎬 **Video:** _coming soon_ · Built for the PayPal AI Hackathon 2026 by Innov4AI SAC (Lima, Peru)

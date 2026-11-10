@@ -154,9 +154,9 @@ class PayPalClient:
             body["detail"]["invoice_number"] = self._request("POST", "/v2/invoicing/generate-next-invoice-number").get("invoice_number")
             return self._request("POST", "/v2/invoicing/invoices", json=body)
 
-    def send_invoice(self, invoice_id: str) -> dict:
+    def send_invoice(self, invoice_id: str, request_id: str = "") -> dict:
         return self._request(
-            "POST", f"/v2/invoicing/invoices/{invoice_id}/send",
+            "POST", f"/v2/invoicing/invoices/{invoice_id}/send", request_id=request_id,
             json={"send_to_invoicer": False, "send_to_recipient": True},
         )
 
@@ -166,21 +166,22 @@ class PayPalClient:
     def remind_invoice(self, invoice_id: str, note: str = "") -> dict:
         return self._request("POST", f"/v2/invoicing/invoices/{invoice_id}/remind", json=_drop_none({"note": note or None}))
 
-    def cancel_invoice(self, invoice_id: str, note: str = "") -> dict:
+    def cancel_invoice(self, invoice_id: str, note: str = "", request_id: str = "") -> dict:
         return self._request(
-            "POST", f"/v2/invoicing/invoices/{invoice_id}/cancel",
+            "POST", f"/v2/invoicing/invoices/{invoice_id}/cancel", request_id=request_id,
             json=_drop_none({"note": note or None, "send_to_recipient": True}),
         )
 
-    def record_payment(self, invoice_id: str, amount: float, method: str = "CASH", note: str = "") -> dict:
+    def record_payment(self, invoice_id: str, amount: float, method: str = "CASH", note: str = "", request_id: str = "",
+                       payment_date: str = "") -> dict:
         """Record a payment received outside PayPal (cash, bank transfer, mobile wallet...)."""
         body = {
             "method": method if method in PAYMENT_METHODS else "OTHER",
-            "payment_date": date.today().isoformat(),
+            "payment_date": payment_date or date.today().isoformat(),  # the business's own date, not the server's
             "amount": {"currency_code": self.currency, "value": f"{float(amount):.2f}"},
             "note": note or None,
         }
-        return self._request("POST", f"/v2/invoicing/invoices/{invoice_id}/payments", json=_drop_none(body))
+        return self._request("POST", f"/v2/invoicing/invoices/{invoice_id}/payments", request_id=request_id, json=_drop_none(body))
 
     def qr_code(self, invoice_id: str, size: int = 300) -> str:
         """Base64 PNG of the invoice payment QR (invoice must be sent)."""
@@ -210,6 +211,10 @@ class PayPalClient:
 
     def get_payout(self, payout_batch_id: str) -> dict:
         return self._request("GET", f"/v1/payments/payouts/{payout_batch_id}")
+
+    def cancel_payout_item(self, payout_item_id: str, request_id: str = "") -> dict:
+        """Take back an unclaimed payout (only possible while the recipient hasn't claimed it): PayPal returns the money."""
+        return self._request("POST", f"/v1/payments/payouts-item/{payout_item_id}/cancel", request_id=request_id)
 
     # --- webhooks ------------------------------------------------------------
     def verify_webhook(self, headers: dict, event: dict | str, webhook_id: str) -> bool:

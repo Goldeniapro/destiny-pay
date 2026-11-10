@@ -50,7 +50,7 @@ These tools only create a confirmation card. Then read back the details (custome
 
 OTHER REQUESTS:
 - "Who owes me?" list_invoices with status unpaid (or overdue). "Did X pay?" get_invoice.
-- "X paid me in cash / by transfer / with Yape or Plin" on an invoice: record_payment. A sale or expense without an invoice: record_movement.
+- "X paid me in cash / by transfer / with Yape or Plin" on an invoice: request_record_payment (the owner authorizes it). A sale or expense without an invoice: record_movement.
 - Bills to pay ("I have to pay rent of 300 on the 5th"): add_bill; list_bills; mark_bill_paid when paid outside PayPal.
 - Reminders for the owner, or a scheduled PayPal reminder to a customer: create_reminder.
 - "Show the QR": show_qr (the invoice must be sent).
@@ -91,11 +91,12 @@ TOOLS: list[dict[str, Any]] = [
      "input_schema": _schema({"status": {"type": "string", "enum": ["unpaid", "overdue", "paid", "draft", "all"]},
                               "customer": {"type": "string", "description": "Filter by customer name, or empty string"}})},
     {"name": "get_invoice", "description": "Get the live status of one invoice from PayPal (e.g. to check whether it was paid).", "input_schema": _schema(dict(_INV))},
-    {"name": "remind_invoice", "description": "Send the customer a PayPal payment reminder now for an unpaid invoice (PayPal allows 2 per day).",
-     "input_schema": _schema({**_INV, "note": {"type": "string", "description": "Short note or empty string"}})},
-    {"name": "record_payment", "description": "Record a payment received outside PayPal on an invoice (cash, bank transfer, Yape, Plin, card).",
-     "input_schema": _schema({**_INV, "amount": {"type": "number"}, "method": {"type": "string", "enum": ["CASH", "BANK_TRANSFER", "YAPE", "PLIN", "CARD", "OTHER"]},
-                              "note": {"type": "string", "description": "Short note or empty string"}})},
+    {"name": "remind_invoice", "description": "Send the customer PayPal's standard payment reminder now for an unpaid invoice (PayPal allows 2 per day). No custom text.",
+     "input_schema": _schema(dict(_INV))},
+    {"name": "request_record_payment", "description": "Ask the owner to authorize recording a payment received outside PayPal on an invoice (cash, bank transfer, Yape, Plin, card). The app records it after the owner authorizes.",
+     "input_schema": _schema({**_INV, "amount": {"type": "number"}, "method": {"type": "string", "enum": ["CASH", "BANK_TRANSFER", "YAPE", "PLIN", "CARD", "OTHER"]}})},
+    {"name": "request_cancel_payout", "description": "Ask the owner to authorize cancelling a PayPal payment to a supplier that the recipient hasn't claimed yet (e.g. a wrong email). PayPal returns the money and the bill is pending again.",
+     "input_schema": _schema({"bill_id": {"type": "integer"}})},
     {"name": "show_qr", "description": "Show the PayPal payment QR of a sent invoice on screen so the customer can scan and pay.", "input_schema": _schema(dict(_INV))},
     {"name": "add_bill", "description": "Add a bill the business has to pay (supplier, rent, services), with due date and optional recurrence.",
      "input_schema": _schema({"payee": _STR, "description": _STR, "amount": {"type": "number"}, "due_date": {"type": "string", "description": "YYYY-MM-DD"},
@@ -138,9 +139,15 @@ def run_tool(biz: Business, conversation_id: str, name: str, args: dict) -> tupl
     if name == "draft_invoice":
         return biz.draft_invoice(a.get("customer_name", ""), a.get("customer_email", ""), a.get("items") or [], a.get("note", ""),
                                  a.get("due_in_days") or 7), None
-    if name in ("request_send_invoice", "request_cancel_invoice", "request_pay_bill"):
-        kind = {"request_send_invoice": "send_invoice", "request_cancel_invoice": "cancel_invoice", "request_pay_bill": "pay_bill"}[name]
-        target = str(a.get("bill_id") if kind == "pay_bill" else a.get("invoice_id", ""))
+    if name in ("request_send_invoice", "request_cancel_invoice", "request_pay_bill", "request_record_payment", "request_cancel_payout"):
+        kind = name.removeprefix("request_")
+        if kind == "record_payment":
+            amount = float(a.get("amount") or 0)
+            if not 0 < amount <= 10000 or amount != amount:
+                raise ValidationError("The payment amount must be greater than 0.")
+            target = f"{a.get('invoice_id', '')}|{int(round(amount * 100))}|{a.get('method', 'CASH')}"
+        else:
+            target = str(a.get("bill_id") if kind in ("pay_bill", "cancel_payout") else a.get("invoice_id", ""))
         out = biz.request_confirmation(kind, target, conversation_id)
         return out, {"confirmation": out}
     if name == "list_invoices":
@@ -148,9 +155,7 @@ def run_tool(biz: Business, conversation_id: str, name: str, args: dict) -> tupl
     if name == "get_invoice":
         return biz.refresh_invoice(a.get("invoice_id", "")), None
     if name == "remind_invoice":
-        return biz.remind_invoice(a.get("invoice_id", ""), a.get("note", "")), None
-    if name == "record_payment":
-        return biz.record_payment(a.get("invoice_id", ""), a.get("amount", 0), a.get("method", "CASH"), a.get("note", "")), None
+        return biz.remind_invoice(a.get("invoice_id", "")), None
     if name == "show_qr":
         image = biz.qr_code(a.get("invoice_id", ""))
         if not image:
@@ -297,7 +302,7 @@ class DestinyPayAgent:
                 if verdict == "yes" and any(classify_reply(a, target["kind"]) != "yes" for a in (alternatives or []) if a.strip()):
                     verdict = "other"  # the recognizer wasn't sure it heard a yes: let the agent ask again
                 if verdict in ("yes", "no"):
-                    done, reply, result = biz.resolve_confirmation(asked, verdict == "yes", lang)
+                    done, reply, result = biz.resolve_confirmation(asked, verdict == "yes", lang, via="voice")
                     self._note(conv, biz, user_text, reply)
                     return {"reply": reply, "actions": [{"tool": "confirmation", "result": {"done": done, "action": target["kind"]}}],
                             "ui": [], "confirmed": asked}
@@ -315,7 +320,7 @@ class DestinyPayAgent:
         """The owner pressed Authorize or Reject in the authorization dialog."""
         lang = lang if lang in LANGS else "es"
         biz = self.business(ws)
-        done, reply, result = biz.resolve_confirmation(confirmation_id, approve, lang, fingerprint)
+        done, reply, result = biz.resolve_confirmation(confirmation_id, approve, lang, fingerprint, via="button")
         conv = self.conversations.peek(conversation_id, ws)
         if conv is not None and conv.lock.acquire(blocking=False):
             try:
@@ -349,7 +354,8 @@ class DestinyPayAgent:
         conv.awaiting = c["confirmation_id"]
         d = c.get("details") or {}
         amount = d.get("total", d.get("amount"))
-        key = {"send_invoice": "rb_send_invoice", "cancel_invoice": "rb_cancel_invoice", "pay_bill": "rb_pay_bill"}.get(c.get("action", ""))
+        key = {"send_invoice": "rb_send_invoice", "cancel_invoice": "rb_cancel_invoice", "pay_bill": "rb_pay_bill",
+               "record_payment": "rb_record_payment", "cancel_payout": "rb_cancel_payout"}.get(c.get("action", ""))
         if amount is None or not key:
             conv.awaiting = ""  # nothing the code can read back: only the buttons can approve it
             return reply
