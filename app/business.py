@@ -34,7 +34,8 @@ PAYOUT_DAILY_WS = float(os.environ.get("DP_PAYOUT_DAILY_LIMIT", "3000"))   # per
 PAYOUT_DAILY_ALL = float(os.environ.get("DP_PAYOUT_GLOBAL_DAILY", "20000"))  # whole demo per day
 SENDS_DAILY_ALL = int(os.environ.get("DP_SENDS_GLOBAL_DAILY", "500"))      # invoices emailed per day
 PAYOUT_OK = {"SUCCESS"}
-PAYOUT_UNCLAIMED = {"UNCLAIMED", "PENDING_CLAIM"}
+PAYOUT_UNCLAIMED = {"UNCLAIMED"}
+RESEND_MAX_DAYS = 25  # stop re-sending an uncertain payout well inside PayPal's 30-day sender_batch_id window
 PAYOUT_BAD = {"FAILED", "RETURNED", "BLOCKED", "DENIED", "REFUNDED", "REVERSED", "CANCELED", "CANCELLED"}
 PAYOUT_HELD = {"ONHOLD"}  # PayPal is reviewing it: still in progress, shown as held
 REFUND_STATUSES = {"REFUNDED", "PARTIALLY_REFUNDED", "MARKED_AS_REFUNDED"}
@@ -160,6 +161,14 @@ class Business:
                 raise ValidationError("Contact limit reached.")
             self.store.x("INSERT INTO contacts(ws,name,email,kind,notes,created_at) VALUES(?,?,?,?,?,?)",
                          (self.ws, name, email, kind, _clean(notes, 300), time.time()))
+        if email:
+            # pending bills of this payee follow the corrected email (a payout in progress or done keeps its own);
+            # the fingerprint includes the email, so any older card is void, and a never-paid email needs the button
+            changed = self.store.x("UPDATE bills SET payee_email=? WHERE ws=? AND payee=? COLLATE NOCASE AND status='pending' "
+                                   "AND lower(payee_email)!=?", (email, self.ws, name, email)).rowcount
+            if changed:
+                self.log("bill_email_updated", f"PayPal email for {name}'s pending bills set to {email}", "bill_email_updated",
+                         {"payee": name, "email": email})
         return self._contact_view(self.store.one("SELECT * FROM contacts WHERE ws=? AND name=? COLLATE NOCASE", (self.ws, name)))
 
     def _resolve_email(self, name: str, email: str) -> tuple[str, str]:
@@ -614,6 +623,12 @@ class Business:
                 continue  # accepted = PayPal has it but gave no link: never re-send; the owner settles it after checking PayPal
             if p["status"] == "unknown" and not p["batch_id"] and now - p["checked_at"] < UNKNOWN_RESEND_SECONDS:
                 continue  # gentle back-off: re-sending the same id is safe but should not hammer PayPal
+            if p["status"] == "unknown" and not p["batch_id"] and now - p["created_at"] > RESEND_MAX_DAYS * 86400:
+                # PayPal keeps sender_batch_id unique for 30 days: past that a resend is no longer a safe retry
+                self.store.x("UPDATE payouts SET status='accepted' WHERE sender_batch_id=?", (p["sender_batch_id"],))
+                b0 = self.store.one("SELECT payee FROM bills WHERE id=? AND ws=?", (p["bill_id"], self.ws))
+                self.store.alert(self.ws, "a_payout_unknown", payee=(b0 or {}).get("payee", ""))
+                continue
             b = self.store.one("SELECT * FROM bills WHERE id=? AND ws=?", (p["bill_id"], self.ws))
             if b is None:
                 continue
@@ -622,7 +637,9 @@ class Business:
             try:
                 if not batch_id and p["status"] in ("unknown", "accepted"):
                     try:  # re-sending with the same sender_batch_id can never pay twice: PayPal refuses a repeat
-                        info = self.paypal.create_payout(p["sender_batch_id"], b["payee_email"], b["amount"])
+                        info = self.paypal.create_payout(p["sender_batch_id"], b["payee_email"], b["amount"],
+                                                         note=_clean(f"{b['description'] or 'Payment'} - {self.info['name']}", 200),
+                                                         subject=f"Payment from {self.info['name']}")
                         batch_id = (info.get("batch_header") or {}).get("payout_batch_id", "") if isinstance(info, dict) else ""
                     except PayPalError as e:
                         if "SENDER_BATCH_ID" in _body(e).upper() or "ALREADY" in _body(e).upper():
@@ -696,6 +713,8 @@ class Business:
             raise ValidationError("The amount must be greater than 0.")
         if not _clean(description, 200):
             raise ValidationError("Describe the sale or expense.")
+        if method == "PAYPAL":  # PayPal money is booked from PayPal's own records, never from a note
+            raise ValidationError("PayPal payments are recorded from PayPal itself; notes are only for cash, transfers, Yape, Plin or card.")
         if self.store.one("SELECT COUNT(*) n FROM movements WHERE ws=?", (self.ws,))["n"] >= MAX_MOVEMENTS:
             raise ValidationError("This demo business reached its limit of recorded movements.")
         self._movement(kind, description, amount, method if method in METHODS else "OTHER", category or ("sales" if kind == "income" else "general"), contact)
@@ -1050,6 +1069,7 @@ class Business:
                 return False, i18n.t("c_busy", lang), {}  # one operation per invoice or bill at a time: no two validate against the same balance
             if self.store.x("UPDATE confirmations SET status=?, resolved_at=? WHERE id=? AND status='pending'", (new_status, time.time(), cid)).rowcount != 1:
                 return False, i18n.t("c_gone", lang), {}  # already handled (double click, button + voice): never run twice
+        n_tx = 0  # payments PayPal already lists on the invoice (part of a cash payment's request id)
         if approve:
             # Claimed first, validated second: nothing can change between the check and the execution unnoticed.
             stale = False
@@ -1061,6 +1081,17 @@ class Business:
                     # run nothing and keep the card, so a bad request can't void the owner's pending authorization
                     self.store.x("UPDATE confirmations SET status='pending', resolved_at=NULL WHERE id=? AND status='executing'", (cid,))
                     return False, i18n.t("c_other_screen", lang), {}
+                if not stale and row["kind"] == "record_payment":
+                    try:  # PayPal's balance must be the one the owner reviewed (a lost refresh can leave ours behind)
+                        pp = self.paypal.get_invoice(current["invoice_id"])
+                        pp_due = int(round(float(((pp.get("due_amount") or {}).get("value")) or -1) * 100))
+                        n_tx = len(((pp.get("payments") or {}).get("transactions")) or [])
+                        stale = pp_due != current["due_cents"]
+                        if stale:
+                            self._refresh_after(current["invoice_id"], current["status"])
+                    except PayPalError:
+                        self.store.x("UPDATE confirmations SET status='pending', resolved_at=NULL WHERE id=? AND status='executing'", (cid,))
+                        return False, i18n.t("c_unverified", lang), {}
                 if not stale and row["kind"] in ("send_invoice", "cancel_invoice"):
                     try:
                         stale = not self._paypal_matches(row["target"], json.loads(row["details"]))  # what PayPal itself holds
@@ -1083,7 +1114,7 @@ class Business:
         if row["kind"] == "record_payment":
             # derived from the operation itself (invoice, amount, balance due), not from the approval: re-authorizing the same
             # payment after a lost answer reuses the id, so PayPal can't record it twice
-            rid = f"dp-rp-{details['invoice_id']}-{details['amount_cents']}-{details['due_cents']}"
+            rid = f"dp-rp-{details['invoice_id']}-{details['amount_cents']}-{details['due_cents']}-{n_tx}"
         try:
             if row["kind"] == "send_invoice":
                 result = self.send_invoice(row["target"], request_id=rid)

@@ -78,6 +78,7 @@ _DAYS = {"es": ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"], "en": ["Mon"
 LOG = {
     "invoice_draft": {"es": 'Borrador de factura para {name}: {amount}', "en": 'Draft invoice for {name}: {amount}', "pt": 'Rascunho de fatura para {name}: {amount}'},
     "authorized": {"es": 'Autorizado por ti ({via}): {kind} · recibo {receipt} · PayPal {ref}', "en": 'Authorized by you ({via}): {kind} · receipt {receipt} · PayPal {ref}', "pt": 'Autorizado por você ({via}): {kind} · recibo {receipt} · PayPal {ref}'},
+    "bill_email_updated": {"es": 'Correo de PayPal de {payee} actualizado a {email} en sus cuentas pendientes', "en": "{payee}'s PayPal email set to {email} on their pending bills", "pt": 'E-mail PayPal de {payee} atualizado para {email} nas contas pendentes'},
     "payout_cancelled": {"es": 'Pago no reclamado a {payee} cancelado: PayPal devuelve {amount}', "en": 'Unclaimed payment to {payee} cancelled: PayPal returns {amount}', "pt": 'Pagamento não resgatado a {payee} cancelado: o PayPal devolve {amount}'},
     "invoice_refunded": {"es": 'Reembolso de {amount} a {name}', "en": 'Refund of {amount} to {name}', "pt": 'Reembolso de {amount} a {name}'},
     "invoice_paid": {"es": '{name} pagó {amount} en línea', "en": '{name} paid {amount} online', "pt": '{name} pagou {amount} online'},

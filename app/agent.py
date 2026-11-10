@@ -115,7 +115,7 @@ TOOLS: list[dict[str, Any]] = [
      "input_schema": _schema({"bill_id": {"type": "integer"}})},
     {"name": "record_movement", "description": "Record a sale (income) or an expense that has no invoice or bill, e.g. a cash sale or buying supplies.",
      "input_schema": _schema({"kind": {"type": "string", "enum": ["income", "expense"]}, "description": _STR, "amount": {"type": "number"},
-                              "method": {"type": "string", "enum": ["CASH", "BANK_TRANSFER", "YAPE", "PLIN", "CARD", "PAYPAL", "OTHER"]},
+                              "method": {"type": "string", "enum": ["CASH", "BANK_TRANSFER", "YAPE", "PLIN", "CARD", "OTHER"]},
                               "category": {"type": "string", "description": "One word, e.g. sales, supplies, rent, transport, salaries"},
                               "contact": {"type": "string", "description": "Customer or supplier name, or empty string"}})},
     {"name": "create_reminder", "description": "Create a reminder for the owner, or schedule a PayPal payment reminder to a customer at a given time.",

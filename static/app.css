@@ -458,3 +458,4 @@ body{background:var(--bg)}
 #app.is-loading .metric-value span,#app.is-loading #projValue span{color:transparent!important}
 #app.is-loading .due-list{min-height:180px;border-radius:10px;background:linear-gradient(90deg,#eef3f9 0,#f8fbff 50%,#eef3f9 100%) 0 0/480px 100%;animation:dpShimmer 1.2s linear infinite}
 .chart-wrap{position:relative}.chart-tag{position:absolute;font-size:11px;font-weight:750;color:#3d4f66;background:#ffffffd9;padding:1px 5px;border-radius:5px;white-space:nowrap;pointer-events:none}.chart-tag.middle{transform:translateX(-50%)}.chart-tag.bad{color:#a2413a}
+.pill.ok{color:#1d6e58!important}.act.wait{color:#7f540d!important}.act.ok,.act.done{color:#1d6e58}

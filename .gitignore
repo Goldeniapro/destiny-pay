@@ -6,3 +6,4 @@ __pycache__/
 sandbox_qr.png
 .DS_Store
 data/
+*.log

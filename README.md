@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/Goldeniapro/destiny-pay/actions/workflows/ci.yml/badge.svg)](https://github.com/Goldeniapro/destiny-pay/actions/workflows/ci.yml) · [Security model](SECURITY.md) · MIT license
 
-**The voice-first money desk for small businesses.** Talk to it in Spanish, English or Portuguese: Destiny Pay bills your customers with PayPal invoices, pays your suppliers with PayPal Payouts, remembers every customer and every debt, reminds you before things are due, and tells you how your business is really doing. **Nothing moves without your confirmation, and that rule is enforced in code, not in a prompt.**
+**The voice-first money desk for small businesses.** Talk to it in Spanish, English or Portuguese: Destiny Pay bills your customers with PayPal invoices, pays your suppliers with PayPal Payouts, remembers every customer and every debt, reminds you before things are due, and tells you how your business is really doing. **Nothing moves without your authorization, and that rule is enforced in code, not in a prompt.**
 
-> 🔗 **Live demo:** https://web-production-5eebcf.up.railway.app (PayPal Sandbox, no real money) · 🎬 **Video:** _coming soon_ · Built for the PayPal AI Hackathon 2026 by Innov4AI SAC (Lima, Peru)
+> 🔗 **Live demo:** https://web-production-5eebcf.up.railway.app (PayPal Sandbox, no real money) · 🎬 **Video:** linked on the Devpost page · Built for the PayPal AI Hackathon 2026 by Innov4AI SAC (Lima, Peru)
 
 ## Why
 Micro and small businesses are about 99% of all companies in Latin America ([CEPAL](https://www.cepal.org/es/temas/micro-pequenas-medianas-empresas-mipyme/acerca-microempresas-pymes)). Many of them sell to tourists and clients abroad: tour guides in Cusco, artisan shops in Lima, guesthouses, freelancers. They run everything from a phone and a notebook: amounts typed by hand, debts nobody chases, bills paid late. Destiny Pay gives them a cashier and a bookkeeper they can simply talk to while they serve customers.
@@ -12,9 +12,9 @@ Micro and small businesses are about 99% of all companies in Latin America ([CEP
 ## Try it in 90 seconds
 1. Open the live demo (Chrome, Edge or Safari). You get your own **sample business**, "Inti Crafts", with customers, suppliers, bills and a month of sales already in memory.
 2. Listen to the **daily briefing**: what you're owed, what's overdue, what you must pay this week.
-3. Tap 🎙️ and say *"Bill Sarah Miller for two alpaca sweaters at 45 dollars"*. Destiny Pay already knows Sarah's email, drafts the PayPal invoice and shows a **confirmation card**. Say **"yes"** or press Confirm: the invoice goes out with its payment link.
+3. Tap 🎙️ and say *"Bill Sarah Miller for two alpaca sweaters at 45 dollars"*. Destiny Pay already knows Sarah's email, drafts the PayPal invoice and opens the **authorization dialog** (amount, email, items, written by the code). Say **"yes"**, or tick "I have checked this exact action" and press **Authorize**: the invoice goes out with its payment link.
 4. Say *"Show me the QR"*, then pay as the customer (sandbox buyer account in the Devpost testing notes). Destiny Pay **announces the payment out loud** (instantly with PayPal webhooks, otherwise within about half a minute).
-5. Say *"Pay Textiles Andinos with PayPal"*: a card shows payee, email and amount; on your yes, a **PayPal Payout** pays the supplier. The bill is marked paid only when PayPal accepts the payout: completed, or unclaimed (the money left your balance and waits for the supplier, who gets a follow-up). A failed or returned payout puts the bill back to pending, undoes the expense and tells you; the next one is scheduled if it's recurring.
+5. Press **Pay** next to Textiles Andinos in *Needs your attention* (or say *"Pay Textiles Andinos with PayPal"*): the dialog shows payee, email and amount, and flags a **first payment to this email**, which only the on-screen button can authorize. A **PayPal Payout** then pays the supplier. The bill is marked paid only when PayPal accepts the payout: completed, or unclaimed (the money left your balance and waits for the supplier, who gets a follow-up). A failed or returned payout puts the bill back to pending, undoes the expense and tells you; the next one is scheduled if it's recurring.
 6. Ask *"How is my business doing this month?"* or *"What should I pay first?"* for grounded, conservative advice.
 7. Close the tab and come back tomorrow: **it remembers everything.**
 
@@ -25,16 +25,18 @@ Micro and small businesses are about 99% of all companies in Latin America ([CEP
 | "Show the QR" | Payment QR on screen | `generate-qr-code` |
 | *(customer pays)* | Spoken alert "Ana just paid you 30 USD" | Verified PayPal webhook + background status refresh |
 | "Remind Ana on Friday" | Schedules a PayPal reminder to the customer | Scheduler + `/remind` |
-| "Ana paid 10 by Yape" / "I sold a hat for 22 cash" | Records the payment or the sale | `/payments` + local ledger |
+| "Ana paid 10 by Yape" | Records the payment on her PayPal invoice after you authorize it | `/payments` (idempotent), reconciled from `payments.transactions` |
+| "I sold a hat for 22 cash" | Notes the cash sale in the books | Local ledger |
+| "What needs me today?" | Inbox with one action each: pay, remind, cancel an unclaimed payout, add a missing email | Proposals open the authorization dialog |
 | "Rent is 300 on the 5th, every month" | Adds a recurring bill | Payables ledger |
-| "Pay the supplier with PayPal" | Confirmation card, then pays | PayPal Payouts, idempotent per bill |
+| "Pay the supplier with PayPal" | Authorization dialog, then pays | PayPal Payouts, idempotent per attempt; unclaimed payouts can be cancelled (authorized) |
 | "Remind me tomorrow at 9 to call the bank" | Owner reminder, spoken when due | Scheduler + alerts |
 | "Remember Sarah always pays late" | Long-term memory for future conversations | Facts store |
 | "How am I doing?" | Income, expenses, overdue, 30-day cash projection, one or two concrete suggestions | Financial overview |
 
 ## Built so an AI can be trusted with money
-- **Human confirmation by code.** The model has no tool that sends, cancels or pays. It can only *request* those actions, which creates a confirmation card. The server executes the action only when the owner presses Confirm, or answers a clear "yes" to that exact request in their very next message. A "yes" meant for another question, or "yes, but change the amount", never triggers a payment. The classifier only accepts a closed confirmation vocabulary in Spanish, English and Portuguese: questions, numbers, corrections, negations and "cancel" never confirm, and every speech-recognition alternative must agree. It is tested case by case.
-- **Never twice.** Confirmations are claimed atomically (a button click and a spoken yes can't both run). Payouts use a unique `sender_batch_id` per bill plus a database lock before any money moves; if PayPal times out, the bill stays "in progress" (it can't be paid another way) until PayPal's own status settles it. Payouts are also capped per payment and per day. Every PayPal POST carries a `PayPal-Request-Id` reused across retries (for payouts, derived from the `sender_batch_id`, so a later resend is deduplicated too). Webhooks are verified against the raw body exactly as PayPal delivered it. If a reply fails after a tool already ran, the agent remembers what was done and never repeats it.
+- **Human authorization by code.** The model has no tool that sends or cancels an invoice, pays, records a payment, marks a bill paid or cancels a payout. It can only *request* those actions, which opens the authorization dialog. The server executes the action only when the owner ticks the review box and presses Authorize, or answers a clear "yes" to the readback the code itself spoke, in their very next message. A "yes" meant for another question, or "yes, but change the amount", never triggers a payment. The classifier only accepts a closed confirmation vocabulary in Spanish, English and Portuguese: questions, numbers, corrections, negations and "cancel" never confirm, and every speech-recognition alternative must agree. It is tested case by case.
+- **Never twice.** Confirmations are claimed atomically (a button click and a spoken yes can't both run). Payouts use a unique `sender_batch_id` per payment attempt plus a database lock before any money moves; if PayPal times out, the bill stays "in progress" (it can't be paid another way) until PayPal's own status settles it. Payouts are also capped per payment and per day. Every PayPal POST carries a `PayPal-Request-Id` reused across retries (for payouts, derived from the `sender_batch_id`, so a later resend is deduplicated too). Webhooks are verified against the raw body exactly as PayPal delivered it. If a reply fails after a tool already ran, the agent remembers what was done and never repeats it.
 - **Isolated.** Every business only sees and acts on its own invoices, bills, reminders and confirmations, even on one shared sandbox merchant.
 - **Untrusted text stays data.** Contact names, notes, remembered facts and PayPal responses are passed as data, never as instructions.
 - **Bounded cost.** Rate limits per visitor and server-wide, per-visitor daily quotas (new businesses, chats, transcriptions, money actions), a daily token budget and a daily voice budget protect the public demo.
@@ -44,7 +46,7 @@ Micro and small businesses are about 99% of all companies in Latin America ([CEP
 - **Sandbox only.** Live PayPal is refused unless explicitly enabled.
 
 ## The authorization gate (how money moves, step by step)
-1. **The AI interprets.** Claude has no tool that sends, cancels or pays. It can only call `request_send_invoice`, `request_cancel_invoice` or `request_pay_bill`.
+1. **The AI interprets.** Claude has no tool that moves money or settles a debt. It can only call `request_send_invoice`, `request_cancel_invoice`, `request_pay_bill`, `request_record_payment`, `request_cancel_payout` or `request_mark_bill_paid`.
 2. **The code fixes the proposal.** The server rebuilds the operation from its own records (customer or payee, email, amount in cents, currency, items or concept) and stores it with a SHA-256 **fingerprint**. A changed operation supersedes the old card.
 3. **The owner authorizes that exact operation.** The authorization dialog shows type, amount, recipient, email, concept, a readback written by the code (not by the AI) and the expiry. *Authorize* stays disabled until the owner ticks "I reviewed the data". The browser must send the fingerprint of what it displayed; a spoken "yes" only counts for the single proposal read back in the previous turn.
 4. **The server re-validates and executes.** It re-reads the operation and refuses if anything changed (amount, email, items, status); the confirmation is claimed atomically, so a double click, a replay or button + voice run once. Only then does it call PayPal, with `PayPal-Request-Id` on every POST and a unique `sender_batch_id` per payout.
@@ -81,7 +83,7 @@ Browser (Web Speech / MediaRecorder, audio player, AG Grid dashboard)
    │  /api/chat · /api/confirm · /api/state · /api/speech · /api/transcribe
    ▼
 FastAPI ── rate limits · budgets · background scheduler · verified PayPal webhooks
-   ├── Claude (claude-opus-5-5) tool loop: 22 strict tools, prompt caching, server-side fallback
+   ├── Claude (claude-opus-5-5) tool loop: 22 typed tools (strict schemas on every one that touches money), prompt caching, server-side fallback
    ├── Business layer: memory, confirmations, ledger, reminders, financial overview  ──►  SQLite
    ├── PayPal REST: Invoicing v2 · Payouts · Webhooks verification (sandbox)
    └── Fish Audio: text-to-speech (a native voice per language) · speech-to-text
@@ -125,7 +127,7 @@ The live demo runs on **Railway** (Procfile, a volume mounted at `/data` with `D
 - Pilot with 10 tourism businesses in Lima and Cusco.
 
 ## Built with
-Claude (Anthropic) · PayPal Invoicing v2, Payouts and Webhooks · Fish Audio · FastAPI · SQLite · AG Grid Community · Web Speech API · Render
+Claude (Anthropic) · PayPal Invoicing v2, Payouts and Webhooks · Fish Audio · FastAPI · SQLite · AG Grid Community · Web Speech API · Railway
 
 Built entirely during the hackathon submission period (November 2026).
 

@@ -802,10 +802,11 @@ def test_record_payment_with_a_lost_answer_is_booked_once_and_never_recorded_twi
     req = biz.request_confirmation("record_payment", target)
     assert biz.resolve_confirmation(req["confirmation_id"], True, "es", req["fingerprint"])[0] is False
     assert biz.overview()["income"] == 0
-    # the owner tries again before the books caught up: same operation, same PayPal-Request-Id
+    # the owner tries again before the books caught up: PayPal's own balance no longer matches what was reviewed,
+    # so nothing is sent and the books are refreshed from PayPal (gate 6: never a second identical request)
     req2 = biz.request_confirmation("record_payment", target)
-    biz.resolve_confirmation(req2["confirmation_id"], True, "es", req2["fingerprint"])
-    assert len(seen_ids) == 2 and seen_ids[0] == seen_ids[1]
+    assert biz.resolve_confirmation(req2["confirmation_id"], True, "es", req2["fingerprint"])[0] is False
+    assert len(seen_ids) == 1
     monkeypatch.setattr(biz.paypal, "record_payment", original)
     biz.refresh_invoice(inv["id"])  # what the scheduler does: PayPal's own list of payments settles the books
     biz.refresh_invoice(inv["id"])

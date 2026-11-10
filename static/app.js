@@ -926,14 +926,15 @@
       { colId: "actions", headerName: t("col_actions"), cellRenderer: billActions, width: 156, sortable: false, pinned: "right" },
     ];
     if (name === "auth") return [
-      { field: "resolved_at", headerName: u("colWhen"), valueFormatter: p => p.value ? new Date(p.value * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "", minWidth: 120, flex: 0.9, sort: "desc" },
-      { field: "kind", headerName: u("colOperation"), valueFormatter: p => u("kind_" + p.value) || p.value, filter: true, minWidth: 190, flex: 1.2, getQuickFilterText: p => u("kind_" + p.value) },
-      { field: "who", headerName: u("colWho"), flex: 1, minWidth: 120, filter: true },
-      { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 100, flex: 0.7, type: "rightAligned" },
-      { field: "status", headerName: u("colDecision"), cellRenderer: decisionPill, minWidth: 150, flex: 0.9, filter: true, filterValueGetter: p => u("decision_" + p.data.status), getQuickFilterText: p => u("decision_" + p.data.status) },
-      { field: "via", headerName: u("colVia"), valueFormatter: p => p.value ? u("via_" + p.value) : "", minWidth: 80, flex: 0.5, hide: narrow() },
-      { field: "receipt", headerName: u("colReceipt"), minWidth: 110, flex: 0.7, cellClass: "mono", hide: narrow() },
-      { field: "ref", headerName: "PayPal", minWidth: 150, flex: 1, cellClass: "mono", hide: narrow() },
+      // fits a laptop without sideways scrolling: operation and contact share a cell, so do "how" and the receipt
+      { field: "resolved_at", headerName: u("colWhen"), valueFormatter: p => p.value ? new Date(p.value * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "", minWidth: 96, flex: 0.7, sort: "desc", wrapText: true, autoHeight: true },
+      { field: "kind", headerName: u("colOperation"), cellRenderer: p => { const r = p.data || {}; const box = el("div", "two-lines"); box.append(el("strong", "", u("kind_" + r.kind) || r.kind), el("span", "", r.who || "")); return box; },
+        filter: true, minWidth: 140, flex: 1.3, getQuickFilterText: p => `${u("kind_" + p.data.kind)} ${p.data.who || ""}`, filterValueGetter: p => u("kind_" + p.data.kind) },
+      { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 86, flex: 0.6, type: "rightAligned" },
+      { field: "status", headerName: u("colDecision"), cellRenderer: decisionPill, minWidth: 112, flex: 0.8, filter: true, filterValueGetter: p => u("decision_" + p.data.status), getQuickFilterText: p => u("decision_" + p.data.status) },
+      { field: "receipt", headerName: u("colReceipt"), cellRenderer: p => { const r = p.data || {}; const box = el("div", "two-lines"); box.append(el("strong", "", r.via ? u("via_" + r.via) : "—"), el("span", "mono", r.receipt || "")); return box; },
+        minWidth: 104, flex: 0.7, hide: narrow() },
+      { field: "ref", headerName: "PayPal", minWidth: 84, flex: 0.8, cellClass: "mono", tooltipField: "ref", hide: narrow() },
     ];
     return [
       { field: "name", headerName: t("col_name"), flex: 1.2, minWidth: 140, filter: true },
@@ -946,7 +947,7 @@
     const holder = $("grid-" + name);
     if (grids[name] && grids[name].__lang !== lang) { grids[name].destroy(); delete grids[name]; }
     if (!grids[name]) {
-      grids[name] = agGrid.createGrid(holder, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name), rowHeight: name === "bills" ? 56 : 46,
+      grids[name] = agGrid.createGrid(holder, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name), rowHeight: name === "bills" || name === "auth" ? 56 : 46,
         defaultColDef: { sortable: true, filter: false, resizable: true, suppressHeaderMenuButton: true }, animateRows: true, localeText: { ...(GRID_LOCALE[lang] || {}), noRowsToShow: t("no_rows"), loadingOoo: "…" },
         getRowClass: p => (p.node.rowPinned ? "row-total" : ""), onFilterChanged: () => updateTotals(name), onRowDataUpdated: () => updateTotals(name),
         ...(name === "invoices" ? { rowSelection: { mode: "multiRow", checkboxes: true, headerCheckbox: true, enableClickSelection: false,

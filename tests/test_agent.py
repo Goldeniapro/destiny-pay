@@ -406,3 +406,18 @@ def test_non_strict_tools_validate_their_own_input(setup):
     from app.agent import run_tool
     assert run_tool(biz, "c", "show_view", {"view": "<script>", "filter": "x" * 500})[1] == {"view": "overview", "filter": "x" * 60}
     assert run_tool(biz, "c", "financial_overview", {"period": "decade"})[0] == biz.overview("month")
+
+
+
+def test_the_model_has_no_tool_that_moves_money_or_settles_a_debt():
+    """SECURITY #1: execution lives only in resolve_confirmation; the model can only file requests."""
+    from app.agent import TOOLS
+    from app.business import GATED_KINDS
+    names = {t["name"] for t in TOOLS}
+    for kind in GATED_KINDS:
+        assert kind not in names and f"request_{kind}" in names
+    for forbidden in ("send_invoice", "cancel_invoice", "pay_bill", "pay_bill_with_paypal", "record_payment", "mark_bill_paid",
+                      "cancel_payout", "cancel_unclaimed_payout", "resolve_confirmation", "confirm"):
+        assert forbidden not in names
+    movement = next(t for t in TOOLS if t["name"] == "record_movement")
+    assert "PAYPAL" not in movement["input_schema"]["properties"]["method"]["enum"]

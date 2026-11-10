@@ -524,13 +524,21 @@ def chat(body: ChatIn, request: Request):
     if tokens_per_ip.left(ip) <= 0:
         raise HTTPException(429, "Daily demo limit reached for this connection. Please come back tomorrow.")
     pending = agent.conversations.peek(body.conversation_id, body.workspace_id)
+    charged = None
     if pending is not None and pending.awaiting:
         limit(request, "money_day")  # this message may approve a payment by voice
         conf = next((c for c in open_business(body.workspace_id).pending_confirmations() if c["id"] == pending.awaiting), None)
         if conf and conf["kind"] == "pay_bill" and classify_reply(text, "pay_bill") == "yes":
             charge_payout(ip, conf)
+            charged = conf
     alternatives = [a[:300] for a in body.alternatives]
-    res = agent.chat(body.workspace_id, body.conversation_id, text, lang_of(body.lang), alternatives)
+    try:
+        res = agent.chat(body.workspace_id, body.conversation_id, text, lang_of(body.lang), alternatives)
+    finally:
+        if charged is not None:  # the allowance is spent only by a payout that actually ran
+            row = store.one("SELECT status FROM confirmations WHERE id=?", (charged["id"],))
+            if not row or row["status"] != "done":
+                payouts_per_ip.charge(ip, -float((charged.get("details") or {}).get("amount") or 0))
     conv = agent.conversations.peek(body.conversation_id, body.workspace_id)
     if conv is not None:
         tokens_per_ip.charge(ip, conv.spent)
