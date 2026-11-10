@@ -112,12 +112,12 @@
     $("moreClose").setAttribute("aria-label", t("close"));
     $$(".sidenav .workspace-tab, .sidenav .foot-link").forEach(b => { const n = b.querySelector("[data-i18n]") || b.querySelector("span:not(.nav-count)"); if (n) b.title = n.textContent; });
     input.placeholder = t("placeholder"); $("t-label").textContent = t("message"); sendBtn.setAttribute("aria-label", t("send"));
-    for (const [id, label] of [["new-conv", u("newConv")], ["readSummary", t("play_brief")], ["closeModal", u("modalClose")]]) { $(id).title = label; $(id).setAttribute("aria-label", label); }
+    for (const [id, label] of [["new-conv", u("newConv")], ["readSummary", t("play_brief")], ["closeModal", u("modalClose")], ["tourClose", u("modalClose")]]) { $(id).title = label; $(id).setAttribute("aria-label", label); }
     $("lang-label").textContent = t("lang");
     $("status-hint").textContent = canListen() ? t("hint") : t("v_unsupported");
     $("qr-title").textContent = t("qr_title"); $("qr-close").textContent = t("close");
     $("legend").textContent = "";
-    for (const [c, k] of [["#19a37a", "chartIn"], ["#d0574e", "chartOut"], ["#0070e0", "chartBalance"]]) {
+    for (const [c, k] of [["#19a37a", "chartIn"], ["#d0574e", "chartOut"]]) {
       const s = el("span"); const i = el("i"); i.style.background = c; s.append(i, u(k)); $("legend").appendChild(s);
     }
     updateMute(); applyStatus(); setState(state); setTab(tab, true);
@@ -389,6 +389,7 @@
   function renderAuthCards() {
     const box = $("cards"); box.textContent = "";
     const count = $("countAuth"); count.hidden = !pending.length; count.textContent = String(pending.length);
+    const bn = $("bnCount"); bn.hidden = !pending.length; bn.textContent = String(pending.length);  // phones: the badge on the assistant button
     for (const c of pending) {
       const card = el("div", "auth-card");
       const ic = el("span", "ac-icon"); ic.appendChild(icon("lock"));
@@ -493,7 +494,9 @@
     if (modalListening) { modalListening = false; cancelListening(); }
     $("approvalBackdrop").hidden = true; document.body.classList.remove("modal-open"); modalConf = null;
     document.querySelector(".site").inert = false;
-    if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
+    const ok = lastFocus && lastFocus.isConnected && lastFocus !== document.body && !lastFocus.disabled;
+    const back = ok ? lastFocus : document.querySelector("#dueList .due-act") || $("authBannerBtn");
+    if (back && typeof back.focus === "function") back.focus();
   }
   async function decide(approve) {
     const c = modalConf; if (!c) return;
@@ -621,7 +624,25 @@
       + `<path d="${line} L${lastX.toFixed(1)} ${H} L2 ${H}Z" fill="url(#areaFade)"/>`
       + `<path d="${line}" fill="none" stroke="#0070e0" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>`
       + `<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="6" fill="#0070e0" stroke="#fff" stroke-width="3"/>`;
+    // a scale you can read: the highest and lowest balance, and where the low point falls. The chart stretches,
+    // so labels are page text positioned over it (in %), never SVG text that would be squeezed
+    const wrap = svg.parentElement; wrap.classList.add("chart-wrap");
+    wrap.querySelectorAll(".chart-tag").forEach(n => n.remove());
+    const label = (tx, ty, text, anchor, cls) => { const d = el("span", "chart-tag " + (cls || "") + " " + (anchor || "start"), text);
+      const sr = svg.getBoundingClientRect(), wr = wrap.getBoundingClientRect();  // SVG elements have no offsetTop/offsetLeft
+      d.style.left = Math.round(sr.left - wr.left + tx / W * sr.width) + "px"; d.style.top = Math.round(sr.top - wr.top + ty / H * sr.height) + "px"; wrap.appendChild(d); };
+    if (cum.length) {
+      const maxV = Math.max(...cum), minV = Math.min(...cum), iMin = cum.indexOf(minV);
+      label(0, Math.max(0, y(maxV) - 30), money(maxV));
+      if (maxV - minV > 1) {
+        const mx = x(iMin), my = y(minV);
+        svg.insertAdjacentHTML("beforeend", `<circle cx="${mx.toFixed(1)}" cy="${my.toFixed(1)}" r="4.5" fill="#fff" stroke="${minV < 0 ? "#d0574e" : "#0070e0"}" stroke-width="2.4"/>`);
+        label(Math.min(Math.max(mx, 110), W - 110), Math.min(H - 30, my + 8), u("chartLow", { amount: money(minV), date: fmtShort(days[iMin].date) }), "middle", minV < 0 ? "bad" : "");
+      }
+      $("areaSummary").textContent = u("chartSummary", { start: money(start || 0), end: money(cum[cum.length - 1]), low: money(minV), date: fmtShort(days[iMin].date) });
+    }
     svg.setAttribute("aria-label", u("chartTitle"));
+    svg.setAttribute("aria-describedby", "areaSummary");
     const axis = $("areaAxis"); axis.textContent = "";
     if (days.length) for (const i of [0, 7, 14, 21, days.length - 1]) axis.appendChild(el("span", "", fmtShort(days[Math.min(i, days.length - 1)].date).toUpperCase()));
   }
@@ -642,15 +663,29 @@
       const yy = cum[i] >= 0 ? mid - (cum[i] / cmax) * (mid - 12) : mid + (-cum[i] / cmax) * (H - mid - 10);
       pts.push(`${pad + i * bw + bw / 2},${yy}`);
     });
-    out += `<polyline points="${pts.join(" ")}" fill="none" stroke="#0070e0" stroke-width="2.4"/>`;
-    svg.innerHTML = out;
+    svg.innerHTML = out;  // the balance has its own chart (overview): mixing two scales on one axis confused readers
+    const NS = "http://www.w3.org/2000/svg";
+    let k = 0;
+    days.forEach(d => {  // a tooltip per bar: date and amount
+      for (const [v, key] of [[d.in, "chartIn"], [d.out, "chartOut"]]) {
+        if (!v) continue;
+        const rect = svg.querySelectorAll("rect")[k++]; if (!rect) continue;
+        const ttl = document.createElementNS(NS, "title"); ttl.textContent = `${fmtShort(d.date)} · ${u(key)}: ${money(v)}`; rect.appendChild(ttl);
+      }
+    });
+    const lab = (ty, text) => { const t_ = document.createElementNS(NS, "text"); t_.setAttribute("x", 4); t_.setAttribute("y", ty); t_.setAttribute("class", "chart-label"); t_.textContent = text; svg.appendChild(t_); };
+    lab(14, "+" + money(max)); lab(H - 4, "−" + money(max));
     svg.setAttribute("aria-label", u("chartTitle"));
     const axis = $("barsAxis"); axis.textContent = "";
     if (days.length) for (const i of [0, 7, 14, 21, days.length - 1]) axis.appendChild(el("span", "", fmtShort(days[Math.min(i, days.length - 1)].date).toUpperCase()));
   }
 
+  let dueJson = "";
   function renderDue(s) {
     const items = s.inbox || [];
+    const json = lang + JSON.stringify(items);
+    if (json === dueJson) return;  // redrawing every refresh would drop keyboard focus
+    dueJson = json;
     const list = $("dueList"); list.textContent = "";
     $("dueCount").textContent = String(items.length).padStart(2, "0");
     if (!items.length) { list.appendChild(el("div", "due-empty", u("dueEmpty"))); return; }
@@ -667,7 +702,7 @@
       else if (act.kind === "cancel_payout") { btn.textContent = u("cancelPayout"); btn.classList.add("warn"); btn.addEventListener("click", () => propose("cancel_payout", act.target, btn)); }
       else if (act.kind === "mark_bill_paid") { btn.textContent = u("inboxSeenPaid"); btn.addEventListener("click", () => propose("mark_bill_paid", act.target, btn)); }
       else if (act.remind) { btn.textContent = u("inboxRemind"); btn.addEventListener("click", () => remindInvoice(act.remind, it.who, btn)); }
-      else if (act.ask === "email") { btn.textContent = u("inboxAddEmail"); btn.addEventListener("click", () => { toAssistant(); input.value = u("askEmail", { name: act.who }); setTimeout(() => input.focus(), 50); }); }
+      else if (act.ask === "email") { btn.textContent = u("inboxAddEmail"); btn.addEventListener("click", () => askForEmail(act.who)); }
       if (btn.textContent) right.append(btn);
       row.append(dot, mid, right);
       list.appendChild(row);
@@ -720,7 +755,7 @@
     const ob = (o.bills_overdue || [])[0];
     // a deterministic, data-grounded first step (the assistant gives the full advice on request)
     const oi = (o.overdue_invoices || [])[0], nb = (o.next_bills || []).find(b => b.due_date >= (o.today || ""));
-    $("recText").textContent = ob ? u("recOverdueBill", { payee: ob.payee, amount: money(ob.amount) })
+    $("recText").textContent = ob ? u(ob.has_email === false ? "recOverdueBillEmail" : "recOverdueBill", { payee: ob.payee, amount: money(ob.amount) })
       : oi ? u("recOverdueInvoice", { name: oi.customer, amount: money(oi.due), date: fmtShort(oi.due_date) })
       : nb ? u("recNext", { payee: nb.payee, amount: money(nb.amount), date: fmtShort(nb.due_date) }) : u("recClear");
   }
@@ -747,9 +782,21 @@
 
   // AG Grid tables
   const grids = {};
+  const GRID_LOCALE = {
+    es: { contains: "Contiene", notContains: "No contiene", equals: "Igual a", notEqual: "Distinto de", startsWith: "Empieza con", endsWith: "Termina con",
+          blank: "Vacío", notBlank: "No vacío", filterOoo: "Filtrar…", noMatchingRows: "Sin resultados", andCondition: "Y", orCondition: "O",
+          ariaRowSelect: "Pulsa Espacio para seleccionar la fila", ariaRowDeselect: "Pulsa Espacio para quitar la selección", ariaRowToggleSelection: "Pulsa Espacio para seleccionar o quitar la fila",
+          ariaRowSelectAll: "Pulsa Espacio para seleccionar todas las filas", ariaChecked: "marcado", ariaUnchecked: "sin marcar", ariaFilterInput: "Filtro", ariaSearch: "Buscar",
+          ariaColumnFiltered: "Columna filtrada", ariaSortableColumn: "Pulsa Enter para ordenar", ariaLabelSelectField: "Elegir", selectAll: "Seleccionar todo" },
+    pt: { contains: "Contém", notContains: "Não contém", equals: "Igual a", notEqual: "Diferente de", startsWith: "Começa com", endsWith: "Termina com",
+          blank: "Vazio", notBlank: "Não vazio", filterOoo: "Filtrar…", noMatchingRows: "Sem resultados", andCondition: "E", orCondition: "OU",
+          ariaRowSelect: "Pressione Espaço para selecionar a linha", ariaRowDeselect: "Pressione Espaço para desmarcar", ariaRowToggleSelection: "Pressione Espaço para marcar ou desmarcar a linha",
+          ariaRowSelectAll: "Pressione Espaço para selecionar todas as linhas", ariaChecked: "marcado", ariaUnchecked: "desmarcado", ariaFilterInput: "Filtro", ariaSearch: "Buscar",
+          ariaColumnFiltered: "Coluna filtrada", ariaSortableColumn: "Pressione Enter para ordenar", ariaLabelSelectField: "Escolher", selectAll: "Selecionar tudo" },
+  };
   const gridTheme = () => agGrid.themeQuartz.withParams({
     fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, backgroundColor: "#ffffff", foregroundColor: "#0a2448",
-    headerBackgroundColor: "#f6f9fd", headerTextColor: "#72839a", headerFontSize: 11.5, headerFontWeight: 750,
+    headerBackgroundColor: "#f6f9fd", headerTextColor: "#5a6b82", headerFontSize: 11.5, headerFontWeight: 750,
     borderColor: "#e4ebf3", rowBorder: { color: "#eef2f7" }, wrapperBorderRadius: 14, accentColor: "#0070e0", rowHoverColor: "#f2f8ff", cellHorizontalPadding: 12,
   });
   function pill(text, cls) { return el("span", "pill " + (cls || ""), text); }
@@ -766,8 +813,11 @@
   }
   function invoiceActions(p) {
     const r = p.data; const box = el("span"); if (!r || p.node.rowPinned) return box;
-    if (r.payer_link) { const a = el("a", "cell-btn", t("pay_link")); a.href = r.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; box.append(a, shareButton(r)); }
-    if (status && status.demo_mode && OPEN.has(r.status)) {
+    if (r.payer_link) {
+      if (!narrow()) { const a = el("a", "cell-btn", t("pay_link")); a.href = r.payer_link; a.target = "_blank"; a.rel = "noopener noreferrer"; box.append(a); }
+      box.append(shareButton(r));
+    }
+    if (status && status.demo_mode && OPEN.has(r.status) && !narrow()) {
       const b = el("button", "cell-btn", t("simulate")); b.type = "button";
       b.addEventListener("click", async () => { b.disabled = true; try { await api(`/api/demo/pay/${encodeURIComponent(r.id)}`, { method: "POST" }); } catch (e) { /* refresh shows it */ } refresh(); });
       box.appendChild(b);
@@ -782,7 +832,11 @@
       box.appendChild(c); return box;
     }
     if (r.status !== "pending") return box;
-    const b = el("button", "cell-btn", t("pay_paypal")); b.type = "button";
+    if (!r.payee_email) {
+      const e = el("button", "cell-btn", u("inboxAddEmail")); e.type = "button";
+      e.addEventListener("click", () => askForEmail(r.payee)); box.appendChild(e); return box;
+    }
+    const b = el("button", "cell-btn", u("inboxPay")); b.type = "button";
     b.addEventListener("click", () => propose("pay_bill", r.id, b));
     box.appendChild(b); return box;
   }
@@ -792,13 +846,14 @@
     box.append(el("strong", "", r.payee), el("span", "", [r.description, t("recurrence")[r.recurrence]].filter(Boolean).join(" · ")));
     return box;
   }
+  function askForEmail(who) { toAssistant(); input.value = u("askEmail", { name: who }); setTimeout(() => input.focus(), 50); }
   // a proposal made from a table row: the server builds it and the authorization dialog opens, nothing runs yet
   async function propose(kind, target, btn) {
     if (btn) btn.disabled = true;
     try {
       const r = await post("/api/proposals", { workspace_id: ws, kind, target: String(target) });
       wantOpen = r.confirmation_id; await refresh();
-    } catch (e) { toast(e.status === 429 ? t("rate") : u("proposalFailed")); }
+    } catch (e) { toast(e.status === 429 ? t("rate") : e.status === 422 ? u("proposalInvalid") : u("proposalFailed")); }
     finally { if (btn) btn.disabled = false; }
   }
   // the assistant asked to show a view (and filter its table): "show me what's overdue"
@@ -833,7 +888,7 @@
     const spec = TOTALS[name];
     g.forEachNodeAfterFilter(node => { n++; if (spec) for (const f of spec.sum) row[f] = (row[f] || 0) + (Number(node.data[f]) || 0); });
     const box = document.querySelector(`.grid-tools[data-grid="${name}"] .grid-count`);
-    if (box) box.textContent = u("gridRows", { n });
+    if (box) box.textContent = u(n === 1 ? "gridRow" : "gridRows", { n });
     if (spec) { row[spec.label] = u("gridTotal"); row.currency = currency; g.setGridOption("pinnedBottomRowData", n ? [row] : []); }
   }
   $$(".grid-tools").forEach(box => {
@@ -849,23 +904,26 @@
     });
   });
   const narrow = () => window.matchMedia && matchMedia("(max-width: 560px)").matches;  // phones: dates are in the due list
+  if (window.matchMedia) matchMedia("(max-width: 560px)").addEventListener("change", () => {
+    for (const name of Object.keys(grids)) grids[name].setGridOption("columnDefs", columns(name));
+  });
   function columns(name) {
     const m = p => p.value == null ? "" : money(p.value, p.data && p.data.currency);
     const d = p => fmtShort(p.value);
     if (name === "invoices") return [
-      { field: "customer", headerName: t("col_customer"), flex: 1.3, minWidth: 120, filter: true },
-      { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: 110, flex: 0.9, type: "rightAligned" },
+      { field: "customer", headerName: t("col_customer"), flex: 1.3, minWidth: narrow() ? 86 : 110, filter: true },
+      { field: "total", headerName: t("col_total"), valueFormatter: m, minWidth: narrow() ? 86 : 110, flex: 0.9, type: "rightAligned" },
       { field: "due", headerName: u("colDue"), valueFormatter: m, minWidth: 104, flex: 0.8, type: "rightAligned", hide: narrow() },
       { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 90, flex: 0.7, hide: narrow() },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 132, flex: 1, filter: true, filterValueGetter: statusLabel, getQuickFilterText: statusLabel },
-      { headerName: t("col_actions"), cellRenderer: invoiceActions, width: status && status.demo_mode ? 256 : 150, sortable: false },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 110, flex: 1, filter: true, filterValueGetter: statusLabel, getQuickFilterText: statusLabel, hide: narrow() },
+      { colId: "actions", headerName: t("col_actions"), cellRenderer: invoiceActions, width: narrow() ? 116 : status && status.demo_mode ? 290 : 196, sortable: false, pinned: "right" },
     ];
     if (name === "bills") return [
-      { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: 150, cellRenderer: twoLines, filter: true },
-      { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: 112, flex: 0.9, type: "rightAligned" },
+      { field: "payee", headerName: t("col_payee"), flex: 2, minWidth: narrow() ? 100 : 130, cellRenderer: twoLines, filter: true },
+      { field: "amount", headerName: t("col_amount"), valueFormatter: m, minWidth: narrow() ? 84 : 112, flex: 0.9, type: "rightAligned" },
       { field: "due_date", headerName: t("col_due_date"), valueFormatter: d, minWidth: 96, flex: 0.8, sort: "asc", hide: narrow() },
-      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 196, flex: 1.1, filter: true, filterValueGetter: statusLabel, getQuickFilterText: statusLabel },
-      { headerName: t("col_actions"), cellRenderer: billActions, width: 164, sortable: false },
+      { field: "status", headerName: t("col_status"), cellRenderer: statusPill, minWidth: 120, flex: 1.1, filter: true, filterValueGetter: statusLabel, getQuickFilterText: statusLabel, hide: narrow() },
+      { colId: "actions", headerName: t("col_actions"), cellRenderer: billActions, width: 156, sortable: false, pinned: "right" },
     ];
     if (name === "auth") return [
       { field: "resolved_at", headerName: u("colWhen"), valueFormatter: p => p.value ? new Date(p.value * 1000).toLocaleString(lang, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "", minWidth: 120, flex: 0.9, sort: "desc" },
@@ -889,7 +947,7 @@
     if (grids[name] && grids[name].__lang !== lang) { grids[name].destroy(); delete grids[name]; }
     if (!grids[name]) {
       grids[name] = agGrid.createGrid(holder, { theme: gridTheme(), columnDefs: columns(name), rowData: rows, getRowId: p => String(p.data.id || p.data.name), rowHeight: name === "bills" ? 56 : 46,
-        defaultColDef: { sortable: true, filter: false, resizable: true, suppressHeaderMenuButton: true }, animateRows: true, localeText: { noRowsToShow: t("no_rows"), loadingOoo: "…" },
+        defaultColDef: { sortable: true, filter: false, resizable: true, suppressHeaderMenuButton: true }, animateRows: true, localeText: { ...(GRID_LOCALE[lang] || {}), noRowsToShow: t("no_rows"), loadingOoo: "…" },
         getRowClass: p => (p.node.rowPinned ? "row-total" : ""), onFilterChanged: () => updateTotals(name), onRowDataUpdated: () => updateTotals(name),
         ...(name === "invoices" ? { rowSelection: { mode: "multiRow", checkboxes: true, headerCheckbox: true, enableClickSelection: false,
                                                      isRowSelectable: node => !!node.data && OPEN.has(node.data.status) },
@@ -901,6 +959,7 @@
     }
     updateTotals(name);
     // a short table fits its rows; a long one scrolls inside the view
+    holder.classList.toggle("empty", !rows.length);
     const fit = rows.length <= 14;
     if (grids[name].__fit !== fit) { grids[name].setGridOption("domLayout", fit ? "autoHeight" : "normal"); holder.classList.toggle("fit", fit); grids[name].__fit = fit; }
   }
@@ -920,6 +979,7 @@
   let wasSeeding = false;
   function render(s) {
     lastState = s; currency = s.business.currency;
+    $("app").classList.remove("is-loading");
     $("bizName").textContent = s.business.name;
     $("bizSub").textContent = s.business.sample ? u("workspaceSub") : u("workspaceSub").split("·")[0].trim();
     const seeding = !!s.business.seeding;

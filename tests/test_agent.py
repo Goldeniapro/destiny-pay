@@ -295,7 +295,7 @@ def test_code_always_reads_back_what_a_yes_will_approve(setup):
     trust(biz, "marta@example.com")
     agent, _ = make([tool("request_pay_bill", {"bill_id": bill["id"]}), text("Tienes 1.900 de alquiler. ¿Te pongo un recordatorio?")])
     res = agent.chat(biz.ws, "conv-rb", "Págale a Marta", "es")
-    assert res["reply"].endswith("Para confirmar: pagar 1.900,00 USD a Marta Quispe con PayPal, al correo marta@example.com. Di «sí» o toca Autorizar.")
+    assert res["reply"].endswith("Para confirmar: pagar 1.900,00 USD a Marta Quispe con PayPal, al correo marta@example.com. Di «sí», o marca la casilla y toca Autorizar.")
 
 
 def test_conversation_ids_are_scoped_to_their_business(setup, make_biz):
@@ -361,7 +361,7 @@ def test_spoken_yes_records_a_cash_payment_only_after_the_code_read_it_back(setu
     biz.send_invoice(inv["id"])
     agent, _ = make([tool("request_record_payment", {"invoice_id": inv["id"], "amount": 10, "method": "YAPE"}), text("Listo para registrar."), text("ok")])
     res = agent.chat(biz.ws, "conv-rp", "Sarah me pagó 10 por Yape", "es")
-    assert res["reply"].endswith("Para confirmar: registrar que Sarah Miller pagó 10,00 USD en Yape. Di «sí» o toca Autorizar.")
+    assert res["reply"].endswith("Para confirmar: registrar que Sarah Miller pagó 10,00 USD en Yape. Di «sí», o marca la casilla y toca Autorizar.")
     res = agent.chat(biz.ws, "conv-rp", "sí", "es")
     assert biz.overview()["income"] == 10
 
@@ -373,7 +373,7 @@ def test_spoken_yes_cancels_an_unclaimed_payout_after_the_readback(setup):
     biz.check_payouts()
     agent, _ = make([tool("request_cancel_payout", {"bill_id": bill["id"]}), text("Puedo cancelarlo."), text("ok")])
     res = agent.chat(biz.ws, "conv-cp", "cancela el pago al proveedor", "es")
-    assert "nobody@unclaimed.example" in res["reply"] and res["reply"].endswith("Di «sí» o toca Autorizar.")
+    assert "nobody@unclaimed.example" in res["reply"] and res["reply"].endswith("Di «sí», o marca la casilla y toca Autorizar.")
     agent.chat(biz.ws, "conv-cp", "sí", "es")
     assert biz.bill_view(bill["id"])["status"] == "pending"
 
