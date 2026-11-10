@@ -322,3 +322,19 @@ body{background:var(--bg)}
 .modal-backdrop{place-items:safe center}
 @media (max-height:900px),(max-width:600px){.modal-backdrop{place-items:start center}}
 @media (max-width:1023px){.auth-banner{flex-wrap:wrap}.auth-banner-btn{width:100%;justify-content:center}.grid-tools{flex-wrap:wrap}.grid-search{max-width:none;flex-basis:100%}}
+/* the authorization dialog fits a laptop screen with its buttons in view */
+.modal-body{padding:20px 28px 18px}
+.modal-badge{padding:6px 10px}
+.modal-body h2{font-size:24px;margin:12px 0 6px}
+.modal-body>p:first-of-type{margin:0 0 12px;line-height:1.55}
+.modal-amount{padding:13px 18px}
+.modal-amount strong{font-size:34px;margin-top:4px}
+.modal-details{margin:8px 0}
+.modal-details>div{padding:8px 2px}
+.modal-warning{margin:8px 0 0;padding:8px 11px}
+.modal-readback{margin:8px 0 4px;padding:9px 12px}
+.read-approval{padding:2px 0 10px}
+.approval-check{padding:10px 12px;margin:0 0 12px}
+.modal-legal{margin:12px 0 0!important}
+.modal-top{padding:14px 22px}
+@media (max-height:820px) and (min-width:601px){.modal-badge{display:none}.modal-body h2{margin-top:0;font-size:22px}.modal-legal{display:none}.modal-amount strong{font-size:30px}}
