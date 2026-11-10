@@ -25,6 +25,7 @@ Micro and small businesses are about 99% of all companies in Latin America ([CEP
 | "Show the QR" | Payment QR on screen | `generate-qr-code` |
 | *(customer pays)* | Spoken alert "Ana just paid you 30 USD" | Verified PayPal webhook + background status refresh |
 | "Remind Ana on Friday" | Schedules a PayPal reminder to the customer | Scheduler + `/remind` |
+| *(one click in Payments)* | **Remind** on any unpaid invoice, **Remind everyone who owes**, or switch on **automatic reminders** every 3 days for overdue invoices | PayPal's own `/remind` (no money moves); `run_auto_reminders` in the scheduler, at most once per invoice every 3 days |
 | "Ana paid 10 by Yape" | Records the payment on her PayPal invoice after you authorize it | `/payments` (idempotent), reconciled from `payments.transactions` |
 | "I sold a hat for 22 cash" | Notes the cash sale in the books | Local ledger |
 | "What needs me today?" | Inbox with one action each: pay, remind, cancel an unclaimed payout, add a missing email | Proposals open the authorization dialog |
@@ -71,7 +72,9 @@ Micro and small businesses are about 99% of all companies in Latin America ([CEP
 PayPal's own [Agent Toolkit](https://github.com/paypal/agent-toolkit) covers invoicing but has no Payouts tools; Destiny Pay closes the loop by paying suppliers too, by voice, with confirmation enforced in code.
 
 ## Voice that holds up at a busy counter
-- **A native voice per language** (Fish Audio), chosen by measuring clarity with real transcriptions and streamed so speech starts in about half a second; the browser's own voice is the automatic fallback.
+- **A native voice per language** (Fish Audio), chosen by measuring clarity with real transcriptions and streamed so speech starts in about half a second.
+- **One voice, always.** When Destiny's voice is configured it never switches to the browser's system voice mid-conversation: the server retries the voice service on network errors, 429 and 5xx; the browser retries its own voice twice; if the browser blocks audio until the first tap, the phrase waits for that tap. If the voice still fails, the answer stays on screen and the owner is told once. (The system voice is used only when no voice service is configured at all.)
+- **A voice watchdog.** The server renders a short real phrase every 10 minutes (rotating languages) and reports `voice.ok` and latency in `/api/status`; `scripts/live_check.py` checks a deployed app end to end the way a visitor uses it (status, a real spoken phrase decoded as MP3, optionally one assistant reply) and exits non-zero if anything a visitor would notice is broken.
 - **Dictation with alternatives**: the agent sees the recognizer's alternatives to pick the right name or number, and reads every item and total back before anything is sent.
 - **Fallback transcription** (server speech-to-text) when browser dictation fails or isn't available, with automatic end-of-speech detection.
 - Clear states (listening, thinking, speaking), tap to interrupt, no listening while speaking (no echo), queued alerts that never cut a reply, a mute button, and typing always works.
@@ -116,6 +119,7 @@ Checks:
 pytest -q                                              # offline test suite, no keys needed
 python scripts/agent_smoke.py                          # real Claude in three languages, simulated PayPal
 python scripts/sandbox_smoke.py buyer@personal.example.com   # real PayPal sandbox: invoices, QR, payments, payout
+python scripts/live_check.py https://<your-app> --chat  # deployed app: status, Destiny's real voice, one AI reply
 ```
 
 ## Deploy
