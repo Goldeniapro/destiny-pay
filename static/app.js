@@ -22,7 +22,7 @@
     return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
   };
   function initialLang() {
-    const saved = store.get("dp_lang");
+    const saved = store.get("dp_lang", true);  // this visit only: every new visit opens in English
     if (saved && I18N[saved]) return saved;
     const q = new URLSearchParams(location.search).get("lang");  // ?lang=es for a shared link
     return q && I18N[q] ? q : "en";  // English first for everyone; ES / PT are one tap away
@@ -114,7 +114,7 @@
     $("status-hint").textContent = canListen() ? t("hint") : t("v_unsupported");
     $("qr-title").textContent = t("qr_title"); $("qr-close").textContent = t("close");
     $("legend").textContent = "";
-    for (const [c, k] of [["#19a37a", "chartIn"], ["#d0574e", "chartOut"]]) {
+    for (const [c, k] of [["#0066d6", "chartIn"], ["#d0574e", "chartOut"]]) {
       const s = el("span"); const i = el("i"); i.style.background = c; s.append(i, u(k)); $("legend").appendChild(s);
     }
     updateMute(); applyStatus(); setState(state); setTab(tab, true);
@@ -653,10 +653,10 @@
     const labels = days.map(d => fmtShort(d.date));
     drawChart("areaChart", {
       type: "line",
-      data: { labels, datasets: [{ label: u("chartBalance"), data: cum, borderColor: "#0f8f77", borderWidth: 3, tension: 0.25, fill: "origin",
-        backgroundColor: "rgba(25,194,160,.14)", pointRadius: cum.map((_, i) => (i === iMin || i === cum.length - 1 ? 5 : 0)),
-        pointBackgroundColor: cum.map((v, i) => (i === iMin && v < 0 ? "#c0392b" : "#0f8f77")), pointHoverRadius: 6,
-        segment: { borderColor: c => (c.p1.parsed.y < 0 ? "#c0392b" : "#0f8f77") } }] },
+      data: { labels, datasets: [{ label: u("chartBalance"), data: cum, borderColor: "#0066d6", borderWidth: 3, tension: 0.25, fill: "origin",
+        backgroundColor: "rgba(0,112,224,.12)", pointRadius: cum.map((_, i) => (i === iMin || i === cum.length - 1 ? 5 : 0)),
+        pointBackgroundColor: cum.map((v, i) => (i === iMin && v < 0 ? "#c0392b" : "#0066d6")), pointHoverRadius: 6,
+        segment: { borderColor: c => (c.p1.parsed.y < 0 ? "#c0392b" : "#0066d6") } }] },
       options: { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: "index", intersect: false },
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${u("chartBalance")}: ${money(c.parsed.y)}` } } },
         scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 5, maxRotation: 0 } },
@@ -670,13 +670,13 @@
     drawChart("chart", {
       type: "bar",
       data: { labels: days.map(d => fmtShort(d.date)), datasets: [
-        { label: u("chartIn"), data: days.map(d => d.in), backgroundColor: "#19a37a", borderRadius: 4, maxBarThickness: 22 },
+        { label: u("chartIn"), data: days.map(d => d.in), backgroundColor: "#0066d6", borderRadius: 4, maxBarThickness: 22 },
         { label: u("chartOut"), data: days.map(d => -d.out), backgroundColor: "#d0574e", borderRadius: 4, maxBarThickness: 22 }] },
       options: { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: "index", intersect: false },
         plugins: { legend: { position: "top", align: "end", labels: { boxWidth: 12, boxHeight: 12, usePointStyle: true } },
                    tooltip: { callbacks: { label: c => `${c.dataset.label}: ${money(Math.abs(c.parsed.y))}` } } },
         scales: { x: { stacked: true, grid: { display: false }, ticks: { maxTicksLimit: 6, maxRotation: 0 } },
-                  y: { stacked: true, ticks: { callback: v => compactMoney(Math.abs(v)), maxTicksLimit: 6 }, grid: { color: c => (c.tick.value === 0 ? "#9fb0c4" : "#eef2f7") } } } },
+                  y: { stacked: true, ticks: { callback: v => compactMoney(v), maxTicksLimit: 6 }, grid: { color: c => (c.tick.value === 0 ? "#9fb0c4" : "#eef2f7") } } } },
     }, lang + JSON.stringify(days));
   }
 
@@ -795,9 +795,9 @@
           ariaColumnFiltered: "Coluna filtrada", ariaSortableColumn: "Pressione Enter para ordenar", ariaLabelSelectField: "Escolher", selectAll: "Selecionar tudo" },
   };
   const gridTheme = () => agGrid.themeQuartz.withParams({
-    fontFamily: "Inter, system-ui, sans-serif", fontSize: 14.5, backgroundColor: "#ffffff", foregroundColor: "#0a2448",
+    fontFamily: "Inter, system-ui, sans-serif", fontSize: 14.5, backgroundColor: "#ffffff", foregroundColor: "#0f1115",
     headerBackgroundColor: "#f6f9fd", headerTextColor: "#5a6b82", headerFontSize: 13, headerFontWeight: 750,
-    borderColor: "#e4ebf3", rowBorder: { color: "#eef2f7" }, wrapperBorderRadius: 14, accentColor: "#0b7f6c", rowHoverColor: "#f2f7f8", cellHorizontalPadding: 12,
+    borderColor: "#e4ebf3", rowBorder: { color: "#eef2f7" }, wrapperBorderRadius: 14, accentColor: "#0066d6", rowHoverColor: "#f2f7fd", cellHorizontalPadding: 12,
   });
   function pill(text, cls) { return el("span", "pill " + (cls || ""), text); }
   function decisionPill(p) {
@@ -1102,7 +1102,7 @@
   $("lang").addEventListener("change", async e => {
     if (busy) { e.target.value = lang; return; }
     cancelListening(); queue = []; stopSpeaking(); closeModal();
-    lang = I18N[e.target.value] ? e.target.value : "en"; store.set("dp_lang", lang);
+    lang = I18N[e.target.value] ? e.target.value : "en"; store.set("dp_lang", lang, true);
     newConversation(false);  // the assistant's language is fixed per conversation; memory stays
     briefingData = null; applyTexts(); await refresh(); briefing();
   });
