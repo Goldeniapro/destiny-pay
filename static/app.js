@@ -464,6 +464,9 @@
     $("modalRecipientValue").textContent = whoOf(c);
     $("modalEmailValue").textContent = d.email || "—";
     $("modalConceptValue").textContent = conceptOf(c);
+    const fp = String(c.fingerprint || "");  // the SHA-256 that binds the approval to this exact operation
+    $("modalFingerprint").textContent = fp ? `SHA-256 · ${fp.slice(0, 8)}…${fp.slice(-8)}` : "—";
+    $("modalFingerprint").title = fp;
     $("modalReadback").textContent = c.readback || "";
     $("confirmApproval").querySelector("span").textContent = `${u("modalConfirm")} ${money(amountOf(c), d.currency)}`;
     $("modalNewRecipient").hidden = !c.new_recipient;

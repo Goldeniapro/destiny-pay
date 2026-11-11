@@ -563,3 +563,4 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 @media (max-width:360px){.intro-brand{font-size:19px;gap:8px}.intro-mark{width:38px;height:38px}.intro-langs{gap:4px}.intro-langs button{padding:6px 8px;font-size:13px;min-height:36px}.intro-wrap{width:calc(100% - 28px)}}
 .cell-btn.icon-only{display:inline-flex;align-items:center;justify-content:center}
 .intro h1 .h1-accent{display:block;background:linear-gradient(90deg,#0070e0,#3d9bff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.modal-fp b{font:600 13.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:#0066d6;letter-spacing:.2px}
